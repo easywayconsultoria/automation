@@ -5,6 +5,7 @@ import { logout } from "@/app/actions/auth";
 const links = [
   ["Dashboard", "/workspace"],
   ["Processos", "/workspace/processes"],
+  ["Catálogo", "/workspace/catalog"],
   ["Conformidade", "/workspace/conformity"],
   ["Drawback", "/workspace/drawback"]
 ];

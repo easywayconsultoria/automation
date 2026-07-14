@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   addInvoiceItem,
+  classifyInvoiceItem,
   generateActionPlan,
   importInvoiceCsv,
   runProcessAnalysis,
@@ -25,18 +26,27 @@ export default async function ProcessPage({
 }) {
   const { processId } = await params;
   const { workspace } = await requireProcess(processId);
-  const process = await prisma.importProcess.findFirst({
-    where: { id: processId, workspaceId: workspace.id },
-    include: {
-      documents: { orderBy: { uploadedAt: "desc" } },
-      items: { orderBy: { lineNumber: "asc" } },
-      inconsistencies: {
-        orderBy: [{ severity: "desc" }, { createdAt: "desc" }]
-      },
-      actionPlan: { include: { items: { orderBy: { createdAt: "asc" } } } },
-      drawback: true
-    }
-  });
+  const [process, catalog] = await Promise.all([
+    prisma.importProcess.findFirst({
+      where: { id: processId, workspaceId: workspace.id },
+      include: {
+        documents: { orderBy: { uploadedAt: "desc" } },
+        items: {
+          orderBy: { lineNumber: "asc" },
+          include: { productCatalog: true }
+        },
+        inconsistencies: {
+          orderBy: [{ severity: "desc" }, { createdAt: "desc" }]
+        },
+        actionPlan: { include: { items: { orderBy: { createdAt: "asc" } } } },
+        drawback: true
+      }
+    }),
+    prisma.productCatalog.findMany({
+      where: { workspaceId: workspace.id, active: true },
+      orderBy: { internalCode: "asc" }
+    })
+  ]);
   if (!process) return null;
   const { message } = await searchParams;
   return (
@@ -101,7 +111,7 @@ export default async function ProcessPage({
           subtitle={`${process.items.length} itens cadastrados`}
         />
         <div className="overflow-x-auto rounded-xl border bg-white">
-          <table className="w-full min-w-[760px] text-left text-sm">
+          <table className="w-full min-w-[1100px] text-left text-sm">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 {[
@@ -111,7 +121,8 @@ export default async function ProcessPage({
                   "NCM",
                   "Qtd.",
                   "Preço",
-                  "Total"
+                  "Total",
+                  "Classificação"
                 ].map((h) => (
                   <th key={h} className="px-4 py-3">
                     {h}
@@ -131,12 +142,57 @@ export default async function ProcessPage({
                   <td className="px-4 py-3">
                     {item.totalPrice.toString()} {item.currency}
                   </td>
+                  <td className="min-w-72 px-4 py-3">
+                    {item.productCatalog && (
+                      <p className="mb-2 text-xs font-semibold text-emerald-700">
+                        {item.productCatalog.internalCode} ·{" "}
+                        {item.productCatalog.description}
+                      </p>
+                    )}
+                    {catalog.length ? (
+                      <form action={classifyInvoiceItem} className="space-y-2">
+                        <input
+                          type="hidden"
+                          name="processId"
+                          value={process.id}
+                        />
+                        <input type="hidden" name="itemId" value={item.id} />
+                        <select
+                          name="productCatalogId"
+                          defaultValue={item.productCatalogId ?? ""}
+                          required
+                          className="w-full rounded-lg border px-2 py-1.5 text-xs"
+                        >
+                          <option value="">Selecionar produto</option>
+                          {catalog.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.internalCode} · {product.description}
+                            </option>
+                          ))}
+                        </select>
+                        <label className="flex items-center gap-2 text-xs text-slate-600">
+                          <input type="checkbox" name="createAlias" /> Criar
+                          alias com os dados deste item
+                        </label>
+                        <button className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white">
+                          Vincular
+                        </button>
+                      </form>
+                    ) : (
+                      <Link
+                        href="/workspace/catalog"
+                        className="text-xs font-semibold text-brand hover:underline"
+                      >
+                        Criar produto no catálogo
+                      </Link>
+                    )}
+                  </td>
                 </tr>
               ))}
               {!process.items.length && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-4 py-8 text-center text-slate-500"
                   >
                     Nenhum item.

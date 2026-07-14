@@ -9,6 +9,73 @@ type Finding = {
 };
 type Product = ProductCatalog & { aliases: ProductAlias[] };
 
+export type MatchCriterion =
+  | "MANUAL"
+  | "ALIAS_CODE_DESCRIPTION"
+  | "ALIAS_CODE"
+  | "ALIAS_DESCRIPTION"
+  | "INTERNAL_CODE";
+
+export function normalizeProductText(value: string | null | undefined) {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+export function matchInvoiceItem(item: InvoiceItem, products: Product[]) {
+  const activeProducts = products.filter((product) => product.active);
+  const manual = activeProducts.find(
+    (product) => product.id === item.productCatalogId
+  );
+  if (manual) return { product: manual, criterion: "MANUAL" as const };
+
+  const code = normalizeProductText(item.supplierCode);
+  const description = normalizeProductText(item.description);
+  const aliases = activeProducts.flatMap((product) =>
+    product.aliases.map((alias) => ({ product, alias }))
+  );
+  const both = aliases.find(
+    ({ alias }) =>
+      code &&
+      description &&
+      normalizeProductText(alias.supplierCode) === code &&
+      normalizeProductText(alias.supplierDescription) === description
+  );
+  if (both)
+    return {
+      product: both.product,
+      criterion: "ALIAS_CODE_DESCRIPTION" as const
+    };
+
+  const byCode = aliases.find(
+    ({ alias }) => code && normalizeProductText(alias.supplierCode) === code
+  );
+  if (byCode)
+    return { product: byCode.product, criterion: "ALIAS_CODE" as const };
+
+  const byDescription = aliases.find(
+    ({ alias }) =>
+      description &&
+      normalizeProductText(alias.supplierDescription) === description
+  );
+  if (byDescription)
+    return {
+      product: byDescription.product,
+      criterion: "ALIAS_DESCRIPTION" as const
+    };
+
+  const byInternalCode = activeProducts.find(
+    (product) => code && normalizeProductText(product.internalCode) === code
+  );
+  if (byInternalCode)
+    return { product: byInternalCode, criterion: "INTERNAL_CODE" as const };
+  return null;
+}
+
 export function analyzeProcess(
   items: InvoiceItem[],
   products: Product[],
@@ -24,13 +91,7 @@ export function analyzeProcess(
     });
   for (const item of items) {
     const base = { invoiceItemId: item.id };
-    const matched = products.some(
-      (product) =>
-        product.internalCode === item.supplierCode ||
-        product.aliases.some(
-          (alias) => alias.supplierCode === item.supplierCode
-        )
-    );
+    const matched = matchInvoiceItem(item, products);
     if (!matched)
       findings.push({
         ...base,

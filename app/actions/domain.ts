@@ -7,7 +7,11 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { requireProcess, requireWorkspace } from "@/lib/auth/context";
 import { writeAudit } from "@/lib/audit/write";
-import { actionForFinding, analyzeProcess } from "@/lib/domain/analysis";
+import {
+  actionForFinding,
+  analyzeProcess,
+  normalizeProductText
+} from "@/lib/domain/analysis";
 import { parseInvoiceCsv } from "@/lib/domain/csv";
 
 function optional(value: FormDataEntryValue | null) {
@@ -16,6 +20,257 @@ function optional(value: FormDataEntryValue | null) {
 }
 function processPath(id: string, message?: string) {
   return `/workspace/processes/${id}${message ? `?message=${encodeURIComponent(message)}` : ""}`;
+}
+function catalogPath(message?: string) {
+  return `/workspace/catalog${message ? `?message=${encodeURIComponent(message)}` : ""}`;
+}
+
+const productSchema = z.object({
+  internalCode: z.string().trim().min(1).max(80),
+  description: z.string().trim().min(2).max(500),
+  ncm: z.string().trim().max(20).optional(),
+  defaultUnit: z.string().trim().max(20).optional()
+});
+
+function productInput(formData: FormData) {
+  return productSchema.safeParse({
+    internalCode: formData.get("internalCode"),
+    description: formData.get("description"),
+    ncm: optional(formData.get("ncm")),
+    defaultUnit: optional(formData.get("defaultUnit"))
+  });
+}
+
+export async function createCatalogProduct(formData: FormData) {
+  const parsed = productInput(formData);
+  if (!parsed.success) redirect(catalogPath("Revise os dados do produto."));
+  const { user, workspace } = await requireWorkspace();
+  const duplicate = await prisma.productCatalog.findFirst({
+    where: {
+      workspaceId: workspace.id,
+      internalCode: { equals: parsed.data.internalCode, mode: "insensitive" }
+    },
+    select: { id: true }
+  });
+  if (duplicate) redirect(catalogPath("Já existe um produto com esse código."));
+  const product = await prisma.productCatalog.create({
+    data: { workspaceId: workspace.id, ...parsed.data }
+  });
+  await writeAudit("catalog_product_created", user.id, workspace.id, {
+    productCatalogId: product.id
+  });
+  redirect(catalogPath("Produto criado."));
+}
+
+export async function updateCatalogProduct(formData: FormData) {
+  const productId = String(formData.get("productId") ?? "");
+  const parsed = productInput(formData);
+  if (!z.string().uuid().safeParse(productId).success || !parsed.success)
+    redirect(catalogPath("Produto inválido."));
+  const { user, workspace } = await requireWorkspace();
+  const duplicate = await prisma.productCatalog.findFirst({
+    where: {
+      workspaceId: workspace.id,
+      id: { not: productId },
+      internalCode: { equals: parsed.data.internalCode, mode: "insensitive" }
+    },
+    select: { id: true }
+  });
+  if (duplicate) redirect(catalogPath("Já existe um produto com esse código."));
+  const updated = await prisma.productCatalog.updateMany({
+    where: { id: productId, workspaceId: workspace.id },
+    data: parsed.data
+  });
+  if (!updated.count) redirect(catalogPath("Produto não encontrado."));
+  await writeAudit("catalog_product_updated", user.id, workspace.id, {
+    productCatalogId: productId
+  });
+  redirect(catalogPath("Produto atualizado."));
+}
+
+export async function toggleCatalogProduct(formData: FormData) {
+  const productId = String(formData.get("productId") ?? "");
+  const { user, workspace } = await requireWorkspace();
+  const product = await prisma.productCatalog.findFirst({
+    where: { id: productId, workspaceId: workspace.id },
+    select: { active: true }
+  });
+  if (!product) redirect(catalogPath("Produto não encontrado."));
+  await prisma.productCatalog.updateMany({
+    where: { id: productId, workspaceId: workspace.id },
+    data: { active: !product.active }
+  });
+  await writeAudit("catalog_product_status_changed", user.id, workspace.id, {
+    productCatalogId: productId,
+    active: String(!product.active)
+  });
+  redirect(
+    catalogPath(product.active ? "Produto desativado." : "Produto ativado.")
+  );
+}
+
+const aliasSchema = z
+  .object({
+    supplierCode: z.string().trim().max(120).optional(),
+    supplierDescription: z.string().trim().max(500).optional(),
+    productCatalogId: z.string().uuid(),
+    confidenceHint: z.coerce.number().min(0).max(1).optional()
+  })
+  .refine((data) => data.supplierCode || data.supplierDescription);
+
+function aliasInput(formData: FormData) {
+  return aliasSchema.safeParse({
+    supplierCode: optional(formData.get("supplierCode")),
+    supplierDescription: optional(formData.get("supplierDescription")),
+    productCatalogId: formData.get("productCatalogId"),
+    confidenceHint: optional(formData.get("confidenceHint"))
+  });
+}
+
+async function hasAliasConflict(
+  workspaceId: string,
+  data: z.infer<typeof aliasSchema>,
+  ignoredId?: string
+) {
+  const aliases = await prisma.productAlias.findMany({
+    where: { workspaceId, ...(ignoredId ? { id: { not: ignoredId } } : {}) },
+    select: { supplierCode: true, supplierDescription: true }
+  });
+  const code = normalizeProductText(data.supplierCode);
+  const description = normalizeProductText(data.supplierDescription);
+  return aliases.some(
+    (alias) =>
+      normalizeProductText(alias.supplierCode) === code &&
+      normalizeProductText(alias.supplierDescription) === description
+  );
+}
+
+export async function createProductAlias(formData: FormData) {
+  const parsed = aliasInput(formData);
+  if (!parsed.success) redirect(catalogPath("Revise os dados do alias."));
+  const { user, workspace } = await requireWorkspace();
+  const product = await prisma.productCatalog.findFirst({
+    where: { id: parsed.data.productCatalogId, workspaceId: workspace.id },
+    select: { id: true }
+  });
+  if (!product) redirect(catalogPath("Produto de destino inválido."));
+  if (await hasAliasConflict(workspace.id, parsed.data))
+    redirect(catalogPath("Já existe um alias com esses dados."));
+  const alias = await prisma.productAlias.create({
+    data: { workspaceId: workspace.id, ...parsed.data }
+  });
+  await writeAudit("product_alias_created", user.id, workspace.id, {
+    productAliasId: alias.id,
+    productCatalogId: product.id
+  });
+  redirect(catalogPath("Alias criado."));
+}
+
+export async function updateProductAlias(formData: FormData) {
+  const aliasId = String(formData.get("aliasId") ?? "");
+  const parsed = aliasInput(formData);
+  if (!z.string().uuid().safeParse(aliasId).success || !parsed.success)
+    redirect(catalogPath("Alias inválido."));
+  const { user, workspace } = await requireWorkspace();
+  const product = await prisma.productCatalog.findFirst({
+    where: { id: parsed.data.productCatalogId, workspaceId: workspace.id },
+    select: { id: true }
+  });
+  if (!product) redirect(catalogPath("Produto de destino inválido."));
+  if (await hasAliasConflict(workspace.id, parsed.data, aliasId))
+    redirect(catalogPath("Já existe um alias com esses dados."));
+  const updated = await prisma.productAlias.updateMany({
+    where: { id: aliasId, workspaceId: workspace.id },
+    data: parsed.data
+  });
+  if (!updated.count) redirect(catalogPath("Alias não encontrado."));
+  await writeAudit("product_alias_updated", user.id, workspace.id, {
+    productAliasId: aliasId,
+    productCatalogId: product.id
+  });
+  redirect(catalogPath("Alias atualizado."));
+}
+
+export async function classifyInvoiceItem(formData: FormData) {
+  const processId = String(formData.get("processId") ?? "");
+  const itemId = String(formData.get("itemId") ?? "");
+  const productCatalogId = String(formData.get("productCatalogId") ?? "");
+  const { user, workspace } = await requireProcess(processId);
+  const [item, product] = await Promise.all([
+    prisma.invoiceItem.findFirst({
+      where: {
+        id: itemId,
+        importProcessId: processId,
+        workspaceId: workspace.id
+      }
+    }),
+    prisma.productCatalog.findFirst({
+      where: { id: productCatalogId, workspaceId: workspace.id, active: true }
+    })
+  ]);
+  if (!item || !product)
+    redirect(processPath(processId, "Item ou produto inválido."));
+  let aliasCreated = false;
+  await prisma.$transaction(async (tx) => {
+    await tx.invoiceItem.updateMany({
+      where: {
+        id: item.id,
+        importProcessId: processId,
+        workspaceId: workspace.id
+      },
+      data: { productCatalogId: product.id }
+    });
+    if (formData.get("createAlias") === "on") {
+      const aliases = await tx.productAlias.findMany({
+        where: { workspaceId: workspace.id },
+        select: { supplierCode: true, supplierDescription: true }
+      });
+      const code = normalizeProductText(item.supplierCode);
+      const description = normalizeProductText(item.description);
+      const duplicate = aliases.some(
+        (alias) =>
+          normalizeProductText(alias.supplierCode) === code &&
+          normalizeProductText(alias.supplierDescription) === description
+      );
+      if (!duplicate && (code || description)) {
+        await tx.productAlias.create({
+          data: {
+            workspaceId: workspace.id,
+            productCatalogId: product.id,
+            supplierCode: item.supplierCode,
+            supplierDescription: item.description,
+            confidenceHint: 1
+          }
+        });
+        aliasCreated = true;
+      }
+    }
+    await tx.inconsistency.updateMany({
+      where: {
+        workspaceId: workspace.id,
+        importProcessId: processId,
+        invoiceItemId: item.id,
+        type: "CATALOG_NOT_FOUND",
+        status: "OPEN"
+      },
+      data: {
+        status: "RESOLVED",
+        resolutionNote: "Classificação manual realizada."
+      }
+    });
+  });
+  await writeAudit("invoice_item_classified", user.id, workspace.id, {
+    processId,
+    invoiceItemId: item.id,
+    productCatalogId: product.id,
+    aliasCreated: String(aliasCreated)
+  });
+  redirect(
+    processPath(
+      processId,
+      aliasCreated ? "Item classificado e alias criado." : "Item classificado."
+    )
+  );
 }
 
 export async function createImportProcess(formData: FormData) {

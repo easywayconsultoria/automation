@@ -1,5 +1,7 @@
 # Vertical operacional de importação
 
+> A gestão de produtos, aliases e a prioridade determinística de classificação estão documentadas em [catalog-matching.md](./catalog-matching.md).
+
 ## Fluxo
 
 1. Crie um processo em `/workspace/processes`.

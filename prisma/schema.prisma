@@ -218,6 +218,7 @@ model InvoiceItem {
   workspaceId       String           @map("workspace_id") @db.Uuid
   importProcessId   String           @map("import_process_id") @db.Uuid
   processDocumentId String?          @map("process_document_id") @db.Uuid
+  productCatalogId  String?          @map("product_catalog_id") @db.Uuid
   lineNumber        Int              @map("line_number")
   supplierCode      String?          @map("supplier_code")
   description       String
@@ -236,10 +237,12 @@ model InvoiceItem {
   workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   importProcess     ImportProcess    @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
   processDocument   ProcessDocument? @relation(fields: [processDocumentId], references: [id], onDelete: SetNull)
+  productCatalog    ProductCatalog?  @relation(fields: [productCatalogId], references: [id], onDelete: SetNull)
   inconsistencies   Inconsistency[]
 
   @@unique([importProcessId, lineNumber])
   @@index([workspaceId, importProcessId])
+  @@index([workspaceId, productCatalogId])
   @@map("invoice_items")
 }
 
@@ -255,6 +258,7 @@ model ProductCatalog {
   updatedAt    DateTime       @updatedAt @map("updated_at")
   workspace    Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   aliases      ProductAlias[]
+  invoiceItems InvoiceItem[]
 
   @@unique([workspaceId, internalCode])
   @@index([workspaceId, active])
