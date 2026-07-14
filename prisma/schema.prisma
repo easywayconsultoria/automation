@@ -98,40 +98,82 @@ enum DrawbackStatus {
   IRREGULAR
 }
 
+enum ConversationStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum ConversationMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+enum ConversationAttachmentKind {
+  INVOICE
+  PORTAL_UNICO_CSV
+  DRAWBACK_CSV
+  NOTE
+  GENERATED_REPORT
+  OTHER
+}
+
+enum ToolExecutionStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum SuggestedActionStatus {
+  OPEN
+  ACCEPTED
+  DISMISSED
+  COMPLETED
+}
+
 model UserProfile {
-  id                String            @id @db.Uuid
-  email             String
-  displayName       String?           @map("display_name")
-  createdAt         DateTime          @default(now()) @map("created_at")
-  updatedAt         DateTime          @updatedAt @map("updated_at")
-  memberships       WorkspaceMember[]
-  owned             Workspace[]       @relation("WorkspaceOwner")
-  auditLogs         AuditLog[]        @relation("AuditActor")
-  createdProcesses  ImportProcess[]   @relation("ProcessCreator")
-  uploadedDocuments ProcessDocument[] @relation("DocumentUploader")
+  id                      String                   @id @db.Uuid
+  email                   String
+  displayName             String?                  @map("display_name")
+  createdAt               DateTime                 @default(now()) @map("created_at")
+  updatedAt               DateTime                 @updatedAt @map("updated_at")
+  memberships             WorkspaceMember[]
+  owned                   Workspace[]              @relation("WorkspaceOwner")
+  auditLogs               AuditLog[]               @relation("AuditActor")
+  createdProcesses        ImportProcess[]          @relation("ProcessCreator")
+  uploadedDocuments       ProcessDocument[]        @relation("DocumentUploader")
+  conversations           Conversation[]           @relation("ConversationCreator")
+  conversationMessages    ConversationMessage[]    @relation("ConversationMessageCreator")
+  conversationAttachments ConversationAttachment[] @relation("ConversationAttachmentCreator")
 
   @@map("user_profiles")
 }
 
 model Workspace {
-  id               String            @id @default(uuid()) @db.Uuid
-  name             String
-  ownerId          String            @unique @map("owner_id") @db.Uuid
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @updatedAt @map("updated_at")
-  owner            UserProfile       @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  members          WorkspaceMember[]
-  auditLogs        AuditLog[]
-  importProcesses  ImportProcess[]
-  processDocuments ProcessDocument[]
-  invoiceItems     InvoiceItem[]
-  products         ProductCatalog[]
-  productAliases   ProductAlias[]
-  inconsistencies  Inconsistency[]
-  actionPlans      ActionPlan[]
-  actionPlanItems  ActionPlanItem[]
-  drawbackRecords  DrawbackRecord[]
-  suppliers        Supplier[]
+  id                      String                   @id @default(uuid()) @db.Uuid
+  name                    String
+  ownerId                 String                   @unique @map("owner_id") @db.Uuid
+  createdAt               DateTime                 @default(now()) @map("created_at")
+  updatedAt               DateTime                 @updatedAt @map("updated_at")
+  owner                   UserProfile              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members                 WorkspaceMember[]
+  auditLogs               AuditLog[]
+  importProcesses         ImportProcess[]
+  processDocuments        ProcessDocument[]
+  invoiceItems            InvoiceItem[]
+  products                ProductCatalog[]
+  productAliases          ProductAlias[]
+  inconsistencies         Inconsistency[]
+  actionPlans             ActionPlan[]
+  actionPlanItems         ActionPlanItem[]
+  drawbackRecords         DrawbackRecord[]
+  suppliers               Supplier[]
+  conversations           Conversation[]
+  conversationMessages    ConversationMessage[]
+  conversationAttachments ConversationAttachment[]
+  toolExecutions          ToolExecution[]
+  suggestedActions        SuggestedAction[]
 
   @@map("workspaces")
 }
@@ -166,28 +208,32 @@ model AuditLog {
 }
 
 model ImportProcess {
-  id              String              @id @default(uuid()) @db.Uuid
-  workspaceId     String              @map("workspace_id") @db.Uuid
-  reference       String
-  clientName      String              @map("client_name")
-  exporterName    String?             @map("exporter_name")
-  status          ImportProcessStatus @default(DRAFT)
-  originCountry   String?             @map("origin_country")
-  incoterm        String?
-  invoiceNumber   String?             @map("invoice_number")
-  notes           String?
-  createdById     String              @map("created_by") @db.Uuid
-  supplierId      String?             @map("supplier_id") @db.Uuid
-  createdAt       DateTime            @default(now()) @map("created_at")
-  updatedAt       DateTime            @updatedAt @map("updated_at")
-  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy       UserProfile         @relation("ProcessCreator", fields: [createdById], references: [id])
-  supplier        Supplier?           @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  documents       ProcessDocument[]
-  items           InvoiceItem[]
-  inconsistencies Inconsistency[]
-  actionPlan      ActionPlan?
-  drawback        DrawbackRecord?
+  id                      String                   @id @default(uuid()) @db.Uuid
+  workspaceId             String                   @map("workspace_id") @db.Uuid
+  reference               String
+  clientName              String                   @map("client_name")
+  exporterName            String?                  @map("exporter_name")
+  status                  ImportProcessStatus      @default(DRAFT)
+  originCountry           String?                  @map("origin_country")
+  incoterm                String?
+  invoiceNumber           String?                  @map("invoice_number")
+  notes                   String?
+  createdById             String                   @map("created_by") @db.Uuid
+  supplierId              String?                  @map("supplier_id") @db.Uuid
+  createdAt               DateTime                 @default(now()) @map("created_at")
+  updatedAt               DateTime                 @updatedAt @map("updated_at")
+  workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy               UserProfile              @relation("ProcessCreator", fields: [createdById], references: [id])
+  supplier                Supplier?                @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  documents               ProcessDocument[]
+  items                   InvoiceItem[]
+  inconsistencies         Inconsistency[]
+  actionPlan              ActionPlan?
+  drawback                DrawbackRecord?
+  conversation            Conversation?
+  conversationAttachments ConversationAttachment[]
+  toolExecutions          ToolExecution[]
+  suggestedActions        SuggestedAction[]
 
   @@unique([workspaceId, reference])
   @@index([workspaceId, status, createdAt])
@@ -196,22 +242,23 @@ model ImportProcess {
 }
 
 model ProcessDocument {
-  id              String         @id @default(uuid()) @db.Uuid
-  workspaceId     String         @map("workspace_id") @db.Uuid
-  importProcessId String         @map("import_process_id") @db.Uuid
-  type            DocumentType
-  fileName        String         @map("file_name")
-  mimeType        String         @map("mime_type")
-  storagePath     String?        @map("storage_path")
-  source          DocumentSource @default(UPLOAD)
-  uploadedById    String         @map("uploaded_by") @db.Uuid
-  uploadedAt      DateTime       @default(now()) @map("uploaded_at")
-  parsedAt        DateTime?      @map("parsed_at")
-  status          DocumentStatus @default(UPLOADED)
-  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  importProcess   ImportProcess  @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
-  uploadedBy      UserProfile    @relation("DocumentUploader", fields: [uploadedById], references: [id])
-  items           InvoiceItem[]
+  id                      String                   @id @default(uuid()) @db.Uuid
+  workspaceId             String                   @map("workspace_id") @db.Uuid
+  importProcessId         String                   @map("import_process_id") @db.Uuid
+  type                    DocumentType
+  fileName                String                   @map("file_name")
+  mimeType                String                   @map("mime_type")
+  storagePath             String?                  @map("storage_path")
+  source                  DocumentSource           @default(UPLOAD)
+  uploadedById            String                   @map("uploaded_by") @db.Uuid
+  uploadedAt              DateTime                 @default(now()) @map("uploaded_at")
+  parsedAt                DateTime?                @map("parsed_at")
+  status                  DocumentStatus           @default(UPLOADED)
+  workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess           ImportProcess            @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  uploadedBy              UserProfile              @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  items                   InvoiceItem[]
+  conversationAttachments ConversationAttachment[]
 
   @@index([workspaceId, importProcessId, uploadedAt])
   @@map("process_documents")
@@ -384,4 +431,105 @@ model DrawbackRecord {
 
   @@index([workspaceId, status])
   @@map("drawback_records")
+}
+
+model Conversation {
+  id               String                   @id @default(uuid()) @db.Uuid
+  workspaceId      String                   @map("workspace_id") @db.Uuid
+  importProcessId  String                   @unique @map("import_process_id") @db.Uuid
+  title            String?
+  status           ConversationStatus       @default(ACTIVE)
+  createdById      String                   @map("created_by") @db.Uuid
+  createdAt        DateTime                 @default(now()) @map("created_at")
+  updatedAt        DateTime                 @updatedAt @map("updated_at")
+  workspace        Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess    ImportProcess            @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  createdBy        UserProfile              @relation("ConversationCreator", fields: [createdById], references: [id])
+  messages         ConversationMessage[]
+  attachments      ConversationAttachment[]
+  toolExecutions   ToolExecution[]
+  suggestedActions SuggestedAction[]
+
+  @@index([workspaceId, updatedAt])
+  @@map("conversations")
+}
+
+model ConversationMessage {
+  id             String                  @id @default(uuid()) @db.Uuid
+  conversationId String                  @map("conversation_id") @db.Uuid
+  workspaceId    String                  @map("workspace_id") @db.Uuid
+  role           ConversationMessageRole
+  content        String
+  structuredData Json?                   @map("structured_data")
+  createdById    String?                 @map("created_by") @db.Uuid
+  createdAt      DateTime                @default(now()) @map("created_at")
+  conversation   Conversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  workspace      Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy      UserProfile?            @relation("ConversationMessageCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  sourcedActions SuggestedAction[]       @relation("SuggestedActionSource")
+
+  @@index([workspaceId, conversationId, createdAt])
+  @@map("conversation_messages")
+}
+
+model ConversationAttachment {
+  id                String                     @id @default(uuid()) @db.Uuid
+  conversationId    String                     @map("conversation_id") @db.Uuid
+  workspaceId       String                     @map("workspace_id") @db.Uuid
+  importProcessId   String                     @map("import_process_id") @db.Uuid
+  processDocumentId String?                    @map("process_document_id") @db.Uuid
+  kind              ConversationAttachmentKind
+  label             String
+  storagePath       String?                    @map("storage_path")
+  metadata          Json?
+  createdById       String                     @map("created_by") @db.Uuid
+  createdAt         DateTime                   @default(now()) @map("created_at")
+  conversation      Conversation               @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  workspace         Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess     ImportProcess              @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  processDocument   ProcessDocument?           @relation(fields: [processDocumentId], references: [id], onDelete: SetNull)
+  createdBy         UserProfile                @relation("ConversationAttachmentCreator", fields: [createdById], references: [id])
+
+  @@index([workspaceId, conversationId, createdAt])
+  @@map("conversation_attachments")
+}
+
+model ToolExecution {
+  id              String              @id @default(uuid()) @db.Uuid
+  conversationId  String              @map("conversation_id") @db.Uuid
+  workspaceId     String              @map("workspace_id") @db.Uuid
+  importProcessId String              @map("import_process_id") @db.Uuid
+  toolName        String              @map("tool_name")
+  input           Json
+  output          Json?
+  status          ToolExecutionStatus @default(RUNNING)
+  createdAt       DateTime            @default(now()) @map("created_at")
+  completedAt     DateTime?           @map("completed_at")
+  conversation    Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess   ImportProcess       @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, conversationId, createdAt])
+  @@map("tool_executions")
+}
+
+model SuggestedAction {
+  id              String                @id @default(uuid()) @db.Uuid
+  conversationId  String                @map("conversation_id") @db.Uuid
+  workspaceId     String                @map("workspace_id") @db.Uuid
+  importProcessId String                @map("import_process_id") @db.Uuid
+  type            String
+  title           String
+  description     String
+  status          SuggestedActionStatus @default(OPEN)
+  sourceMessageId String?               @map("source_message_id") @db.Uuid
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+  conversation    Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  workspace       Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess   ImportProcess         @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  sourceMessage   ConversationMessage?  @relation("SuggestedActionSource", fields: [sourceMessageId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, conversationId, status])
+  @@map("suggested_actions")
 }

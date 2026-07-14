@@ -1,10 +1,13 @@
 import Link from "next/link";
 import {
+  runConversationQuickAction,
+  sendConversationMessage,
+  uploadConversationAttachment
+} from "@/app/actions/conversation";
+import {
   addInvoiceItem,
   classifyInvoiceItem,
-  generateActionPlan,
   importInvoiceCsv,
-  runProcessAnalysis,
   saveDrawback,
   setProcessSupplier,
   uploadProcessDocument
@@ -27,7 +30,7 @@ export default async function ProcessPage({
 }) {
   const { processId } = await params;
   const { workspace } = await requireProcess(processId);
-  const [process, catalog, suppliers] = await Promise.all([
+  const [process, catalog, suppliers, conversation] = await Promise.all([
     prisma.importProcess.findFirst({
       where: { id: processId, workspaceId: workspace.id },
       include: {
@@ -51,9 +54,21 @@ export default async function ProcessPage({
     prisma.supplier.findMany({
       where: { workspaceId: workspace.id, active: true },
       orderBy: { name: "asc" }
+    }),
+    prisma.conversation.findFirst({
+      where: { workspaceId: workspace.id, importProcessId: processId },
+      include: {
+        messages: { orderBy: { createdAt: "asc" }, take: 100 },
+        attachments: { orderBy: { createdAt: "desc" }, take: 20 },
+        suggestedActions: {
+          where: { status: "OPEN" },
+          orderBy: { createdAt: "desc" },
+          take: 8
+        }
+      }
     })
   ]);
-  if (!process) return null;
+  if (!process || !conversation) return null;
   const { message } = await searchParams;
   return (
     <>
@@ -74,26 +89,176 @@ export default async function ProcessPage({
             {process.invoiceNumber ?? "Invoice não informada"}
           </p>
         </div>
-        <div className="flex gap-2">
-          <form action={runProcessAnalysis}>
-            <input type="hidden" name="processId" value={process.id} />
-            <button className="rounded-lg bg-ink px-4 py-2.5 text-sm font-semibold text-white">
-              Rodar análise
-            </button>
-          </form>
-          <form action={generateActionPlan}>
-            <input type="hidden" name="processId" value={process.id} />
-            <button className="rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white">
-              Gerar plano
-            </button>
-          </form>
-        </div>
+        <span className="rounded-full bg-emerald-100 px-4 py-2 text-xs font-bold text-emerald-800">
+          IA CORPORATIVA · DETERMINÍSTICA
+        </span>
       </div>
       {message && (
         <p className="mt-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           {message}
         </p>
       )}
+      <section className="mt-6 grid min-h-[680px] gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="flex min-h-[680px] flex-col overflow-hidden rounded-2xl border bg-white shadow-sm">
+          <div className="border-b bg-ink px-6 py-4 text-white">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">
+              Conversa do processo
+            </p>
+            <h2 className="mt-1 font-semibold">
+              {conversation.title ?? process.reference}
+            </h2>
+          </div>
+          <div className="flex-1 space-y-4 overflow-y-auto bg-slate-50/70 p-5">
+            {!conversation.messages.length && (
+              <div className="mx-auto max-w-xl rounded-xl border border-dashed bg-white p-6 text-center text-sm text-slate-500">
+                Converse com este processo. Posso resumir o caso, executar a
+                análise e organizar os próximos passos.
+              </div>
+            )}
+            {conversation.messages.map((item) => (
+              <article
+                key={item.id}
+                className={
+                  item.role === "USER"
+                    ? "ml-auto max-w-[82%] rounded-2xl rounded-br-sm bg-brand px-4 py-3 text-sm text-white"
+                    : item.role === "TOOL"
+                      ? "mx-auto w-fit rounded-full border bg-white px-3 py-1.5 text-xs font-semibold text-slate-500"
+                      : item.role === "SYSTEM"
+                        ? "mx-auto max-w-[90%] text-center text-xs text-slate-500"
+                        : "max-w-[88%] rounded-2xl rounded-bl-sm border bg-white px-4 py-3 text-sm text-slate-700 shadow-sm"
+                }
+              >
+                {item.role === "ASSISTANT" && (
+                  <p className="mb-1 text-xs font-bold text-brand">
+                    EasyWay IA
+                  </p>
+                )}
+                <p className="whitespace-pre-wrap">{item.content}</p>
+                <time
+                  className={`mt-2 block text-[10px] ${item.role === "USER" ? "text-emerald-100" : "text-slate-400"}`}
+                >
+                  {item.createdAt.toLocaleString("pt-BR")}
+                </time>
+              </article>
+            ))}
+          </div>
+          <div className="border-t bg-white p-4">
+            <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+              {[
+                ["summarize_process", "Resumir processo"],
+                ["list_inconsistencies", "Ver inconsistências"],
+                ["run_analysis", "Rodar análise"],
+                ["generate_action_plan", "Gerar plano"],
+                ["list_unmatched_items", "Itens sem classificação"],
+                ["summarize_drawback", "Resumo de drawback"]
+              ].map(([toolName, label]) => (
+                <form action={runConversationQuickAction} key={toolName}>
+                  <input type="hidden" name="processId" value={process.id} />
+                  <input type="hidden" name="toolName" value={toolName} />
+                  <button className="whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold hover:border-brand hover:text-brand">
+                    {label}
+                  </button>
+                </form>
+              ))}
+            </div>
+            <form
+              action={sendConversationMessage}
+              className="flex items-end gap-3"
+            >
+              <input type="hidden" name="processId" value={process.id} />
+              <textarea
+                name="content"
+                required
+                rows={2}
+                placeholder="Pergunte sobre este processo ou peça uma ação operacional…"
+                className="min-h-14 flex-1 resize-none rounded-xl border px-4 py-3 text-sm"
+              />
+              <button className="rounded-xl bg-brand px-5 py-3 font-semibold text-white">
+                Enviar
+              </button>
+            </form>
+          </div>
+        </div>
+        <aside className="space-y-4">
+          <ContextCard
+            title="Estado do caso"
+            value={`${process.inconsistencies.filter((item) => item.status === "OPEN").length} inconsistências abertas`}
+            detail={`${process.items.length} itens · ${process.documents.length} documentos`}
+          />
+          <ContextCard
+            title="Plano de ação"
+            value={process.actionPlan?.status ?? "Não gerado"}
+            detail={
+              process.actionPlan?.summary ?? "Peça à IA para gerar o plano."
+            }
+          />
+          <ContextCard
+            title="Drawback"
+            value={process.drawback?.status ?? "Não cadastrado"}
+            detail={process.drawback?.mode ?? "Sem modalidade"}
+          />
+          <div className="rounded-xl border bg-white p-4">
+            <h3 className="font-semibold">Anexar ao contexto</h3>
+            <form
+              action={uploadConversationAttachment}
+              className="mt-3 space-y-3"
+            >
+              <input type="hidden" name="processId" value={process.id} />
+              <select
+                name="kind"
+                className="w-full rounded-lg border px-3 py-2 text-sm"
+              >
+                <option value="INVOICE">Invoice</option>
+                <option value="PORTAL_UNICO_CSV">CSV Portal Único</option>
+                <option value="DRAWBACK_CSV">CSV Drawback</option>
+                <option value="OTHER">Arquivo de apoio</option>
+              </select>
+              <input
+                type="file"
+                name="file"
+                required
+                accept=".pdf,.csv,.txt,.png,.jpg,.jpeg"
+                className="block w-full text-xs"
+              />
+              <button className="w-full rounded-lg bg-ink px-3 py-2 text-sm font-semibold text-white">
+                Adicionar arquivo
+              </button>
+            </form>
+            <div className="mt-4 space-y-2">
+              {conversation.attachments.slice(0, 5).map((attachment) => (
+                <div
+                  key={attachment.id}
+                  className="rounded-lg bg-slate-50 px-3 py-2"
+                >
+                  <p className="truncate text-xs font-semibold">
+                    {attachment.label}
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    {attachment.kind}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+          {conversation.suggestedActions.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <h3 className="font-semibold text-amber-900">Ações sugeridas</h3>
+              <div className="mt-3 space-y-3">
+                {conversation.suggestedActions.map((action) => (
+                  <div key={action.id}>
+                    <p className="text-sm font-semibold text-amber-900">
+                      {action.title}
+                    </p>
+                    <p className="mt-1 text-xs text-amber-800">
+                      {action.description}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </aside>
+      </section>
       <form
         action={setProcessSupplier}
         className="mt-5 flex flex-wrap items-end gap-3 rounded-xl border bg-white p-4"
@@ -123,7 +288,10 @@ export default async function ProcessPage({
           </span>
         )}
       </form>
-      <nav className="mt-8 flex gap-4 overflow-x-auto border-b text-sm font-medium">
+      <p className="mt-12 text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+        Detalhes operacionais
+      </p>
+      <nav className="mt-3 flex gap-4 overflow-x-auto border-b text-sm font-medium">
         <a href="#items" className="pb-3">
           Itens
         </a>
@@ -388,6 +556,25 @@ function SectionTitle({
       <h2 className="text-xl font-semibold">{title}</h2>
       <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
     </div>
+  );
+}
+function ContextCard({
+  title,
+  value,
+  detail
+}: {
+  title: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <article className="rounded-xl border bg-white p-4">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+        {title}
+      </p>
+      <p className="mt-2 font-semibold">{value}</p>
+      <p className="mt-1 text-xs text-slate-500">{detail}</p>
+    </article>
   );
 }
 function Field({

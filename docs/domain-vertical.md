@@ -3,6 +3,8 @@
 > A gestão de produtos, aliases e a prioridade determinística de classificação estão documentadas em [catalog-matching.md](./catalog-matching.md).
 >
 > O contexto de fornecedores e as métricas operacionais estão documentados em [suppliers-quality.md](./suppliers-quality.md).
+>
+> A experiência conversacional por processo e as tools determinísticas estão documentadas em [ai-first-foundation.md](./ai-first-foundation.md).
 
 ## Fluxo
 

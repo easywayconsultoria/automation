@@ -447,7 +447,22 @@ export async function createImportProcess(formData: FormData) {
       originCountry: optional(formData.get("originCountry")),
       incoterm: optional(formData.get("incoterm"))?.toUpperCase(),
       invoiceNumber: optional(formData.get("invoiceNumber")),
-      notes: optional(formData.get("notes"))
+      notes: optional(formData.get("notes")),
+      conversation: {
+        create: {
+          workspaceId: workspace.id,
+          createdById: user.id,
+          title: `Conversa · ${parsed.data.reference}`,
+          messages: {
+            create: {
+              workspaceId: workspace.id,
+              role: "SYSTEM",
+              content:
+                "Conversa criada. Posso resumir o processo, analisar inconsistências e orientar os próximos passos."
+            }
+          }
+        }
+      }
     }
   });
   await writeAudit("import_process_created", user.id, workspace.id, {
