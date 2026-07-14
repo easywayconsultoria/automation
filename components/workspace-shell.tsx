@@ -15,11 +15,13 @@ export function WorkspaceShell({
   workspaceName,
   userName,
   email,
+  showLayoutAdmin,
   children
 }: {
   workspaceName: string;
   userName: string;
   email?: string;
+  showLayoutAdmin?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -44,6 +46,14 @@ export function WorkspaceShell({
               {label}
             </Link>
           ))}
+          {showLayoutAdmin && (
+            <Link
+              href="/workspace/admin/layouts"
+              className="block whitespace-nowrap rounded-lg px-3 py-2 text-sm text-emerald-300 hover:bg-white/10 hover:text-white"
+            >
+              Admin · Layouts
+            </Link>
+          )}
         </nav>
       </aside>
       <main>

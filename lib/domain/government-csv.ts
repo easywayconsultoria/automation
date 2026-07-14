@@ -1,10 +1,10 @@
-type Layout = {
+export type LayoutContract = {
   version: string;
   headers: string[];
   aliases: Record<string, string>;
 };
 
-export const PORTAL_LAYOUTS: Layout[] = [
+export const PORTAL_LAYOUTS: LayoutContract[] = [
   {
     version: "1.0",
     headers: ["productCode", "description", "ncm", "registrationStatus"],
@@ -20,7 +20,7 @@ export const PORTAL_LAYOUTS: Layout[] = [
     }
   }
 ];
-export const DRAWBACK_LAYOUTS: Layout[] = [
+export const DRAWBACK_LAYOUTS: LayoutContract[] = [
   {
     version: "1.0",
     headers: [
@@ -81,14 +81,18 @@ function source(content: string) {
     .filter((line) => line.trim());
   return { lines, header: lines.length ? lineValues(lines[0]) : [] };
 }
-function detect(header: string[], layouts: Layout[]) {
+function detect(header: string[], layouts: LayoutContract[]) {
   return layouts.find(
     (layout) =>
       layout.headers.length === header.length &&
       layout.headers.every((item, index) => item === header[index])
   );
 }
-function canonicalRaw(header: string[], values: string[], layout: Layout) {
+function canonicalRaw(
+  header: string[],
+  values: string[],
+  layout: LayoutContract
+) {
   return Object.fromEntries(
     header.map((key, column) => [
       layout.aliases[key] ?? key,
@@ -96,7 +100,7 @@ function canonicalRaw(header: string[], values: string[], layout: Layout) {
     ])
   );
 }
-function unknown(header: string[], layouts: Layout[]) {
+function unknown(header: string[], layouts: LayoutContract[]) {
   return {
     header,
     detectedVersion: null,
@@ -110,10 +114,13 @@ function unknown(header: string[], layouts: Layout[]) {
   };
 }
 
-export function parsePortalCsv(content: string) {
+export function parsePortalCsv(
+  content: string,
+  layouts: LayoutContract[] = PORTAL_LAYOUTS
+) {
   const { lines, header } = source(content);
-  const layout = detect(header, PORTAL_LAYOUTS);
-  if (!layout) return unknown(header, PORTAL_LAYOUTS);
+  const layout = detect(header, layouts);
+  if (!layout) return unknown(header, layouts);
   const rows: Record<string, string | number | Record<string, string>>[] = [];
   const errors: { line: number; message: string }[] = [];
   lines.slice(1).forEach((line, index) => {
@@ -138,10 +145,13 @@ export function parsePortalCsv(content: string) {
   return { header, detectedVersion: layout.version, rows, errors };
 }
 
-export function parseDrawbackCsv(content: string) {
+export function parseDrawbackCsv(
+  content: string,
+  layouts: LayoutContract[] = DRAWBACK_LAYOUTS
+) {
   const { lines, header } = source(content);
-  const layout = detect(header, DRAWBACK_LAYOUTS);
-  if (!layout) return unknown(header, DRAWBACK_LAYOUTS);
+  const layout = detect(header, layouts);
+  if (!layout) return unknown(header, layouts);
   const rows: Record<string, string | number | Record<string, string>>[] = [];
   const errors: { line: number; message: string }[] = [];
   lines.slice(1).forEach((line, index) => {

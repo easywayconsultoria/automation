@@ -144,6 +144,14 @@ enum CsvLayoutType {
   DRAWBACK
 }
 
+enum CsvLayoutStatus {
+  DRAFT
+  TESTING
+  ACTIVE
+  INACTIVE
+  DEPRECATED
+}
+
 enum RegistrationProposalStatus {
   DRAFT
   PENDING_REVIEW
@@ -170,6 +178,8 @@ model UserProfile {
   createdRegistrationProposals  RegistrationProposal[]      @relation("RegistrationProposalCreator")
   reviewedRegistrationProposals RegistrationProposal[]      @relation("RegistrationProposalReviewer")
   registrationProposalEvents    RegistrationProposalEvent[] @relation("RegistrationProposalEventActor")
+  layoutStatusEvents            CsvLayoutStatusEvent[]      @relation("CsvLayoutStatusEventActor")
+  layoutSandboxTests            CsvLayoutSandboxTest[]      @relation("CsvLayoutSandboxTestActor")
 
   @@map("user_profiles")
 }
@@ -206,6 +216,8 @@ model Workspace {
   csvLayouts                 CsvLayoutDefinition[]
   registrationProposals      RegistrationProposal[]
   registrationProposalEvents RegistrationProposalEvent[]
+  layoutStatusEvents         CsvLayoutStatusEvent[]
+  layoutSandboxTests         CsvLayoutSandboxTest[]
 
   @@map("workspaces")
 }
@@ -692,27 +704,68 @@ model DrawbackCsvRow {
 }
 
 model CsvLayoutDefinition {
-  id              String              @id @default(uuid()) @db.Uuid
-  workspaceId     String?             @map("workspace_id") @db.Uuid
+  id              String                 @id @default(uuid()) @db.Uuid
+  workspaceId     String?                @map("workspace_id") @db.Uuid
   name            String
   type            CsvLayoutType
   version         String
-  active          Boolean             @default(true)
-  requiredColumns Json                @map("required_columns")
-  optionalColumns Json                @map("optional_columns")
-  expectedOrder   Json                @map("expected_order")
-  validationRules Json                @map("validation_rules")
+  status          CsvLayoutStatus        @default(DRAFT)
+  requiredColumns Json                   @map("required_columns")
+  optionalColumns Json                   @map("optional_columns")
+  expectedOrder   Json                   @map("expected_order")
+  validationRules Json                   @map("validation_rules")
   aliases         Json?
   description     String
-  createdAt       DateTime            @default(now()) @map("created_at")
-  updatedAt       DateTime            @updatedAt @map("updated_at")
-  workspace       Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
+  workspace       Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   portalImports   PortalCsvImport[]
   drawbackImports DrawbackCsvImport[]
+  statusEvents    CsvLayoutStatusEvent[]
+  sandboxTests    CsvLayoutSandboxTest[]
 
   @@unique([workspaceId, type, version])
-  @@index([type, active, version])
+  @@index([type, status, version])
   @@map("csv_layout_definitions")
+}
+
+model CsvLayoutStatusEvent {
+  id          String              @id @default(uuid()) @db.Uuid
+  csvLayoutId String              @map("csv_layout_id") @db.Uuid
+  workspaceId String?             @map("workspace_id") @db.Uuid
+  fromStatus  CsvLayoutStatus     @map("from_status")
+  toStatus    CsvLayoutStatus     @map("to_status")
+  reason      String?
+  actorId     String              @map("actor_id") @db.Uuid
+  createdAt   DateTime            @default(now()) @map("created_at")
+  csvLayout   CsvLayoutDefinition @relation(fields: [csvLayoutId], references: [id], onDelete: Cascade)
+  workspace   Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor       UserProfile         @relation("CsvLayoutStatusEventActor", fields: [actorId], references: [id])
+
+  @@index([csvLayoutId, createdAt])
+  @@map("csv_layout_status_events")
+}
+
+model CsvLayoutSandboxTest {
+  id             String              @id @default(uuid()) @db.Uuid
+  csvLayoutId    String              @map("csv_layout_id") @db.Uuid
+  workspaceId    String              @map("workspace_id") @db.Uuid
+  actorId        String              @map("actor_id") @db.Uuid
+  fileName       String              @map("file_name")
+  detectedHeader Json                @map("detected_header")
+  mappedHeader   Json                @map("mapped_header")
+  validRows      Int                 @map("valid_rows")
+  invalidRows    Int                 @map("invalid_rows")
+  errors         Json
+  preview        Json
+  passed         Boolean
+  createdAt      DateTime            @default(now()) @map("created_at")
+  csvLayout      CsvLayoutDefinition @relation(fields: [csvLayoutId], references: [id], onDelete: Cascade)
+  workspace      Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor          UserProfile         @relation("CsvLayoutSandboxTestActor", fields: [actorId], references: [id])
+
+  @@index([workspaceId, csvLayoutId, createdAt])
+  @@map("csv_layout_sandbox_tests")
 }
 
 model RegistrationProposal {
