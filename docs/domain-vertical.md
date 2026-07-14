@@ -1,6 +1,8 @@
 # Vertical operacional de importação
 
 > A gestão de produtos, aliases e a prioridade determinística de classificação estão documentadas em [catalog-matching.md](./catalog-matching.md).
+>
+> O contexto de fornecedores e as métricas operacionais estão documentados em [suppliers-quality.md](./suppliers-quality.md).
 
 ## Fluxo
 

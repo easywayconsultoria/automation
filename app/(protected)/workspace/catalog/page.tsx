@@ -47,14 +47,20 @@ export default async function CatalogPage({
             }
           : {})
       },
-      include: { productCatalog: true },
+      include: { productCatalog: true, supplier: true },
       orderBy: { createdAt: "desc" }
     })
   ]);
-  const allProducts = await prisma.productCatalog.findMany({
-    where: { workspaceId: workspace.id },
-    orderBy: { internalCode: "asc" }
-  });
+  const [allProducts, suppliers] = await Promise.all([
+    prisma.productCatalog.findMany({
+      where: { workspaceId: workspace.id },
+      orderBy: { internalCode: "asc" }
+    }),
+    prisma.supplier.findMany({
+      where: { workspaceId: workspace.id, active: true },
+      orderBy: { name: "asc" }
+    })
+  ]);
 
   return (
     <>
@@ -130,7 +136,7 @@ export default async function CatalogPage({
           Variações determinísticas que apontam para um produto do catálogo.
         </p>
         <div className="mt-5 grid gap-5 xl:grid-cols-[360px_1fr]">
-          <AliasForm products={allProducts} />
+          <AliasForm products={allProducts} suppliers={suppliers} />
           <div>
             <SearchForm
               name="aliasQ"
@@ -152,9 +158,18 @@ export default async function CatalogPage({
                       → {alias.productCatalog.internalCode} ·{" "}
                       {alias.productCatalog.description}
                     </p>
+                    <p className="mt-1 text-xs font-semibold text-brand">
+                      {alias.supplier
+                        ? `Específico: ${alias.supplier.name}`
+                        : "Alias global"}
+                    </p>
                   </summary>
                   <div className="mt-5 border-t pt-5">
-                    <AliasForm alias={alias} products={allProducts} />
+                    <AliasForm
+                      alias={alias}
+                      products={allProducts}
+                      suppliers={suppliers}
+                    />
                   </div>
                 </details>
               ))}
@@ -217,13 +232,16 @@ type AliasValue = {
   supplierDescription: string | null;
   confidenceHint: { toString(): string } | null;
   productCatalogId: string;
+  supplierId: string | null;
 };
 function AliasForm({
   alias,
-  products
+  products,
+  suppliers
 }: {
   alias?: AliasValue;
   products: ProductValue[];
+  suppliers: { id: string; name: string }[];
 }) {
   return (
     <form
@@ -242,6 +260,21 @@ function AliasForm({
         label="Descrição do fornecedor"
         defaultValue={alias?.supplierDescription ?? ""}
       />
+      <label className="text-sm font-medium">
+        Escopo do fornecedor
+        <select
+          name="supplierId"
+          defaultValue={alias?.supplierId ?? ""}
+          className="mt-2 w-full rounded-lg border px-3 py-2"
+        >
+          <option value="">Global — qualquer fornecedor</option>
+          {suppliers.map((supplier) => (
+            <option key={supplier.id} value={supplier.id}>
+              {supplier.name}
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="text-sm font-medium">
         Produto vinculado *
         <select

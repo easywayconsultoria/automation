@@ -11,9 +11,12 @@ type Product = ProductCatalog & { aliases: ProductAlias[] };
 
 export type MatchCriterion =
   | "MANUAL"
-  | "ALIAS_CODE_DESCRIPTION"
-  | "ALIAS_CODE"
-  | "ALIAS_DESCRIPTION"
+  | "SUPPLIER_ALIAS_CODE_DESCRIPTION"
+  | "SUPPLIER_ALIAS_CODE"
+  | "SUPPLIER_ALIAS_DESCRIPTION"
+  | "GLOBAL_ALIAS_CODE_DESCRIPTION"
+  | "GLOBAL_ALIAS_CODE"
+  | "GLOBAL_ALIAS_DESCRIPTION"
   | "INTERNAL_CODE";
 
 export function normalizeProductText(value: string | null | undefined) {
@@ -26,7 +29,11 @@ export function normalizeProductText(value: string | null | undefined) {
     .replace(/\s+/g, " ");
 }
 
-export function matchInvoiceItem(item: InvoiceItem, products: Product[]) {
+export function matchInvoiceItem(
+  item: InvoiceItem,
+  products: Product[],
+  supplierId?: string | null
+) {
   const activeProducts = products.filter((product) => product.active);
   const manual = activeProducts.find(
     (product) => product.id === item.productCatalogId
@@ -38,35 +45,54 @@ export function matchInvoiceItem(item: InvoiceItem, products: Product[]) {
   const aliases = activeProducts.flatMap((product) =>
     product.aliases.map((alias) => ({ product, alias }))
   );
-  const both = aliases.find(
-    ({ alias }) =>
-      code &&
-      description &&
-      normalizeProductText(alias.supplierCode) === code &&
-      normalizeProductText(alias.supplierDescription) === description
+  const findAlias = (
+    candidates: typeof aliases,
+    criterionPrefix: "SUPPLIER" | "GLOBAL"
+  ) => {
+    const both = candidates.find(
+      ({ alias }) =>
+        code &&
+        description &&
+        normalizeProductText(alias.supplierCode) === code &&
+        normalizeProductText(alias.supplierDescription) === description
+    );
+    if (both)
+      return {
+        product: both.product,
+        criterion: `${criterionPrefix}_ALIAS_CODE_DESCRIPTION` as MatchCriterion
+      };
+    const byCode = candidates.find(
+      ({ alias }) => code && normalizeProductText(alias.supplierCode) === code
+    );
+    if (byCode)
+      return {
+        product: byCode.product,
+        criterion: `${criterionPrefix}_ALIAS_CODE` as MatchCriterion
+      };
+    const byDescription = candidates.find(
+      ({ alias }) =>
+        description &&
+        normalizeProductText(alias.supplierDescription) === description
+    );
+    if (byDescription)
+      return {
+        product: byDescription.product,
+        criterion: `${criterionPrefix}_ALIAS_DESCRIPTION` as MatchCriterion
+      };
+    return null;
+  };
+  if (supplierId) {
+    const supplierMatch = findAlias(
+      aliases.filter(({ alias }) => alias.supplierId === supplierId),
+      "SUPPLIER"
+    );
+    if (supplierMatch) return supplierMatch;
+  }
+  const globalMatch = findAlias(
+    aliases.filter(({ alias }) => !alias.supplierId),
+    "GLOBAL"
   );
-  if (both)
-    return {
-      product: both.product,
-      criterion: "ALIAS_CODE_DESCRIPTION" as const
-    };
-
-  const byCode = aliases.find(
-    ({ alias }) => code && normalizeProductText(alias.supplierCode) === code
-  );
-  if (byCode)
-    return { product: byCode.product, criterion: "ALIAS_CODE" as const };
-
-  const byDescription = aliases.find(
-    ({ alias }) =>
-      description &&
-      normalizeProductText(alias.supplierDescription) === description
-  );
-  if (byDescription)
-    return {
-      product: byDescription.product,
-      criterion: "ALIAS_DESCRIPTION" as const
-    };
+  if (globalMatch) return globalMatch;
 
   const byInternalCode = activeProducts.find(
     (product) => code && normalizeProductText(product.internalCode) === code
@@ -79,7 +105,8 @@ export function matchInvoiceItem(item: InvoiceItem, products: Product[]) {
 export function analyzeProcess(
   items: InvoiceItem[],
   products: Product[],
-  drawbackDraft: boolean
+  drawbackDraft: boolean,
+  supplierId?: string | null
 ) {
   const findings: Finding[] = [];
   if (!items.length)
@@ -91,7 +118,7 @@ export function analyzeProcess(
     });
   for (const item of items) {
     const base = { invoiceItemId: item.id };
-    const matched = matchInvoiceItem(item, products);
+    const matched = matchInvoiceItem(item, products, supplierId);
     if (!matched)
       findings.push({
         ...base,

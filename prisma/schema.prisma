@@ -131,6 +131,7 @@ model Workspace {
   actionPlans      ActionPlan[]
   actionPlanItems  ActionPlanItem[]
   drawbackRecords  DrawbackRecord[]
+  suppliers        Supplier[]
 
   @@map("workspaces")
 }
@@ -176,10 +177,12 @@ model ImportProcess {
   invoiceNumber   String?             @map("invoice_number")
   notes           String?
   createdById     String              @map("created_by") @db.Uuid
+  supplierId      String?             @map("supplier_id") @db.Uuid
   createdAt       DateTime            @default(now()) @map("created_at")
   updatedAt       DateTime            @updatedAt @map("updated_at")
   workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy       UserProfile         @relation("ProcessCreator", fields: [createdById], references: [id])
+  supplier        Supplier?           @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   documents       ProcessDocument[]
   items           InvoiceItem[]
   inconsistencies Inconsistency[]
@@ -188,6 +191,7 @@ model ImportProcess {
 
   @@unique([workspaceId, reference])
   @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, supplierId])
   @@map("import_processes")
 }
 
@@ -269,15 +273,39 @@ model ProductAlias {
   id                  String         @id @default(uuid()) @db.Uuid
   workspaceId         String         @map("workspace_id") @db.Uuid
   productCatalogId    String         @map("product_catalog_id") @db.Uuid
+  supplierId          String?        @map("supplier_id") @db.Uuid
   supplierCode        String?        @map("supplier_code")
   supplierDescription String?        @map("supplier_description")
   confidenceHint      Decimal?       @map("confidence_hint") @db.Decimal(5, 4)
   createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
   workspace           Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   productCatalog      ProductCatalog @relation(fields: [productCatalogId], references: [id], onDelete: Cascade)
+  supplier            Supplier?      @relation(fields: [supplierId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, supplierCode])
+  @@index([workspaceId, supplierId, supplierCode])
   @@map("product_aliases")
+}
+
+model Supplier {
+  id             String          @id @default(uuid()) @db.Uuid
+  workspaceId    String          @map("workspace_id") @db.Uuid
+  name           String
+  normalizedName String          @map("normalized_name")
+  externalCode   String?         @map("external_code")
+  country        String?
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  processes      ImportProcess[]
+  aliases        ProductAlias[]
+
+  @@unique([workspaceId, normalizedName])
+  @@index([workspaceId, active, name])
+  @@index([workspaceId, externalCode])
+  @@map("suppliers")
 }
 
 model Inconsistency {

@@ -6,6 +6,7 @@ const links = [
   ["Dashboard", "/workspace"],
   ["Processos", "/workspace/processes"],
   ["Catálogo", "/workspace/catalog"],
+  ["Fornecedores", "/workspace/suppliers"],
   ["Conformidade", "/workspace/conformity"],
   ["Drawback", "/workspace/drawback"]
 ];

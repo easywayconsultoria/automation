@@ -24,6 +24,120 @@ function processPath(id: string, message?: string) {
 function catalogPath(message?: string) {
   return `/workspace/catalog${message ? `?message=${encodeURIComponent(message)}` : ""}`;
 }
+function suppliersPath(message?: string) {
+  return `/workspace/suppliers${message ? `?message=${encodeURIComponent(message)}` : ""}`;
+}
+
+const supplierSchema = z.object({
+  name: z.string().trim().min(2).max(160),
+  externalCode: z.string().trim().max(80).optional(),
+  country: z.string().trim().max(80).optional()
+});
+
+function supplierInput(formData: FormData) {
+  return supplierSchema.safeParse({
+    name: formData.get("name"),
+    externalCode: optional(formData.get("externalCode")),
+    country: optional(formData.get("country"))
+  });
+}
+
+export async function createSupplier(formData: FormData) {
+  const parsed = supplierInput(formData);
+  if (!parsed.success)
+    redirect(suppliersPath("Revise os dados do fornecedor."));
+  const { user, workspace } = await requireWorkspace();
+  const normalizedName = normalizeProductText(parsed.data.name);
+  const duplicate = await prisma.supplier.findFirst({
+    where: {
+      workspaceId: workspace.id,
+      OR: [
+        { normalizedName },
+        ...(parsed.data.externalCode
+          ? [
+              {
+                externalCode: {
+                  equals: parsed.data.externalCode,
+                  mode: "insensitive" as const
+                }
+              }
+            ]
+          : [])
+      ]
+    },
+    select: { id: true }
+  });
+  if (duplicate)
+    redirect(suppliersPath("Fornecedor ou código externo já cadastrado."));
+  const supplier = await prisma.supplier.create({
+    data: { workspaceId: workspace.id, normalizedName, ...parsed.data }
+  });
+  await writeAudit("supplier_created", user.id, workspace.id, {
+    supplierId: supplier.id
+  });
+  redirect(suppliersPath("Fornecedor criado."));
+}
+
+export async function updateSupplier(formData: FormData) {
+  const supplierId = String(formData.get("supplierId") ?? "");
+  const parsed = supplierInput(formData);
+  if (!z.string().uuid().safeParse(supplierId).success || !parsed.success)
+    redirect(suppliersPath("Fornecedor inválido."));
+  const { user, workspace } = await requireWorkspace();
+  const normalizedName = normalizeProductText(parsed.data.name);
+  const duplicate = await prisma.supplier.findFirst({
+    where: {
+      workspaceId: workspace.id,
+      id: { not: supplierId },
+      OR: [
+        { normalizedName },
+        ...(parsed.data.externalCode
+          ? [
+              {
+                externalCode: {
+                  equals: parsed.data.externalCode,
+                  mode: "insensitive" as const
+                }
+              }
+            ]
+          : [])
+      ]
+    },
+    select: { id: true }
+  });
+  if (duplicate)
+    redirect(suppliersPath("Fornecedor ou código externo já cadastrado."));
+  const updated = await prisma.supplier.updateMany({
+    where: { id: supplierId, workspaceId: workspace.id },
+    data: { normalizedName, ...parsed.data }
+  });
+  if (!updated.count) redirect(suppliersPath("Fornecedor não encontrado."));
+  await writeAudit("supplier_updated", user.id, workspace.id, { supplierId });
+  redirect(suppliersPath("Fornecedor atualizado."));
+}
+
+export async function toggleSupplier(formData: FormData) {
+  const supplierId = String(formData.get("supplierId") ?? "");
+  const { user, workspace } = await requireWorkspace();
+  const supplier = await prisma.supplier.findFirst({
+    where: { id: supplierId, workspaceId: workspace.id },
+    select: { active: true }
+  });
+  if (!supplier) redirect(suppliersPath("Fornecedor não encontrado."));
+  await prisma.supplier.updateMany({
+    where: { id: supplierId, workspaceId: workspace.id },
+    data: { active: !supplier.active }
+  });
+  await writeAudit("supplier_status_changed", user.id, workspace.id, {
+    supplierId,
+    active: String(!supplier.active)
+  });
+  redirect(
+    suppliersPath(
+      supplier.active ? "Fornecedor desativado." : "Fornecedor ativado."
+    )
+  );
+}
 
 const productSchema = z.object({
   internalCode: z.string().trim().min(1).max(80),
@@ -114,6 +228,7 @@ const aliasSchema = z
     supplierCode: z.string().trim().max(120).optional(),
     supplierDescription: z.string().trim().max(500).optional(),
     productCatalogId: z.string().uuid(),
+    supplierId: z.string().uuid().optional(),
     confidenceHint: z.coerce.number().min(0).max(1).optional()
   })
   .refine((data) => data.supplierCode || data.supplierDescription);
@@ -123,6 +238,7 @@ function aliasInput(formData: FormData) {
     supplierCode: optional(formData.get("supplierCode")),
     supplierDescription: optional(formData.get("supplierDescription")),
     productCatalogId: formData.get("productCatalogId"),
+    supplierId: optional(formData.get("supplierId")),
     confidenceHint: optional(formData.get("confidenceHint"))
   });
 }
@@ -133,7 +249,11 @@ async function hasAliasConflict(
   ignoredId?: string
 ) {
   const aliases = await prisma.productAlias.findMany({
-    where: { workspaceId, ...(ignoredId ? { id: { not: ignoredId } } : {}) },
+    where: {
+      workspaceId,
+      supplierId: data.supplierId ?? null,
+      ...(ignoredId ? { id: { not: ignoredId } } : {})
+    },
     select: { supplierCode: true, supplierDescription: true }
   });
   const code = normalizeProductText(data.supplierCode);
@@ -150,11 +270,20 @@ export async function createProductAlias(formData: FormData) {
   const parsed = aliasInput(formData);
   if (!parsed.success) redirect(catalogPath("Revise os dados do alias."));
   const { user, workspace } = await requireWorkspace();
-  const product = await prisma.productCatalog.findFirst({
-    where: { id: parsed.data.productCatalogId, workspaceId: workspace.id },
-    select: { id: true }
-  });
-  if (!product) redirect(catalogPath("Produto de destino inválido."));
+  const [product, supplier] = await Promise.all([
+    prisma.productCatalog.findFirst({
+      where: { id: parsed.data.productCatalogId, workspaceId: workspace.id },
+      select: { id: true }
+    }),
+    parsed.data.supplierId
+      ? prisma.supplier.findFirst({
+          where: { id: parsed.data.supplierId, workspaceId: workspace.id },
+          select: { id: true }
+        })
+      : null
+  ]);
+  if (!product || (parsed.data.supplierId && !supplier))
+    redirect(catalogPath("Produto ou fornecedor de destino inválido."));
   if (await hasAliasConflict(workspace.id, parsed.data))
     redirect(catalogPath("Já existe um alias com esses dados."));
   const alias = await prisma.productAlias.create({
@@ -162,7 +291,8 @@ export async function createProductAlias(formData: FormData) {
   });
   await writeAudit("product_alias_created", user.id, workspace.id, {
     productAliasId: alias.id,
-    productCatalogId: product.id
+    productCatalogId: product.id,
+    supplierId: supplier?.id ?? "global"
   });
   redirect(catalogPath("Alias criado."));
 }
@@ -173,11 +303,20 @@ export async function updateProductAlias(formData: FormData) {
   if (!z.string().uuid().safeParse(aliasId).success || !parsed.success)
     redirect(catalogPath("Alias inválido."));
   const { user, workspace } = await requireWorkspace();
-  const product = await prisma.productCatalog.findFirst({
-    where: { id: parsed.data.productCatalogId, workspaceId: workspace.id },
-    select: { id: true }
-  });
-  if (!product) redirect(catalogPath("Produto de destino inválido."));
+  const [product, supplier] = await Promise.all([
+    prisma.productCatalog.findFirst({
+      where: { id: parsed.data.productCatalogId, workspaceId: workspace.id },
+      select: { id: true }
+    }),
+    parsed.data.supplierId
+      ? prisma.supplier.findFirst({
+          where: { id: parsed.data.supplierId, workspaceId: workspace.id },
+          select: { id: true }
+        })
+      : null
+  ]);
+  if (!product || (parsed.data.supplierId && !supplier))
+    redirect(catalogPath("Produto ou fornecedor de destino inválido."));
   if (await hasAliasConflict(workspace.id, parsed.data, aliasId))
     redirect(catalogPath("Já existe um alias com esses dados."));
   const updated = await prisma.productAlias.updateMany({
@@ -187,7 +326,8 @@ export async function updateProductAlias(formData: FormData) {
   if (!updated.count) redirect(catalogPath("Alias não encontrado."));
   await writeAudit("product_alias_updated", user.id, workspace.id, {
     productAliasId: aliasId,
-    productCatalogId: product.id
+    productCatalogId: product.id,
+    supplierId: supplier?.id ?? "global"
   });
   redirect(catalogPath("Alias atualizado."));
 }
@@ -196,7 +336,7 @@ export async function classifyInvoiceItem(formData: FormData) {
   const processId = String(formData.get("processId") ?? "");
   const itemId = String(formData.get("itemId") ?? "");
   const productCatalogId = String(formData.get("productCatalogId") ?? "");
-  const { user, workspace } = await requireProcess(processId);
+  const { user, workspace, process } = await requireProcess(processId);
   const [item, product] = await Promise.all([
     prisma.invoiceItem.findFirst({
       where: {
@@ -223,7 +363,7 @@ export async function classifyInvoiceItem(formData: FormData) {
     });
     if (formData.get("createAlias") === "on") {
       const aliases = await tx.productAlias.findMany({
-        where: { workspaceId: workspace.id },
+        where: { workspaceId: workspace.id, supplierId: process.supplierId },
         select: { supplierCode: true, supplierDescription: true }
       });
       const code = normalizeProductText(item.supplierCode);
@@ -239,6 +379,7 @@ export async function classifyInvoiceItem(formData: FormData) {
           data: {
             workspaceId: workspace.id,
             productCatalogId: product.id,
+            supplierId: process.supplierId,
             supplierCode: item.supplierCode,
             supplierDescription: item.description,
             confidenceHint: 1
@@ -287,10 +428,20 @@ export async function createImportProcess(formData: FormData) {
   if (!parsed.success)
     redirect("/workspace/processes?message=Revise os campos obrigatórios.");
   const { user, workspace } = await requireWorkspace();
+  const supplierId = optional(formData.get("supplierId"));
+  if (
+    supplierId &&
+    !(await prisma.supplier.findFirst({
+      where: { id: supplierId, workspaceId: workspace.id, active: true },
+      select: { id: true }
+    }))
+  )
+    redirect("/workspace/processes?message=Fornecedor inválido.");
   const process = await prisma.importProcess.create({
     data: {
       workspaceId: workspace.id,
       createdById: user.id,
+      supplierId,
       ...parsed.data,
       exporterName: optional(formData.get("exporterName")),
       originCountry: optional(formData.get("originCountry")),
@@ -304,6 +455,29 @@ export async function createImportProcess(formData: FormData) {
     reference: process.reference
   });
   redirect(processPath(process.id, "Processo criado."));
+}
+
+export async function setProcessSupplier(formData: FormData) {
+  const processId = String(formData.get("processId") ?? "");
+  const supplierId = optional(formData.get("supplierId"));
+  const { user, workspace } = await requireProcess(processId);
+  if (
+    supplierId &&
+    !(await prisma.supplier.findFirst({
+      where: { id: supplierId, workspaceId: workspace.id, active: true },
+      select: { id: true }
+    }))
+  )
+    redirect(processPath(processId, "Fornecedor inválido."));
+  await prisma.importProcess.updateMany({
+    where: { id: processId, workspaceId: workspace.id },
+    data: { supplierId: supplierId ?? null }
+  });
+  await writeAudit("process_supplier_changed", user.id, workspace.id, {
+    processId,
+    supplierId: supplierId ?? "none"
+  });
+  redirect(processPath(processId, "Fornecedor do processo atualizado."));
 }
 
 export async function addInvoiceItem(formData: FormData) {
@@ -464,7 +638,7 @@ export async function importInvoiceCsv(formData: FormData) {
 
 export async function runProcessAnalysis(formData: FormData) {
   const processId = String(formData.get("processId"));
-  const { user, workspace } = await requireProcess(processId);
+  const { user, workspace, process } = await requireProcess(processId);
   const [items, products, drawback] = await Promise.all([
     prisma.invoiceItem.findMany({
       where: { workspaceId: workspace.id, importProcessId: processId }
@@ -480,7 +654,8 @@ export async function runProcessAnalysis(formData: FormData) {
   const findings = analyzeProcess(
     items,
     products,
-    drawback?.status === "DRAFT"
+    drawback?.status === "DRAFT",
+    process.supplierId
   );
   await prisma.$transaction(async (tx) => {
     await tx.inconsistency.deleteMany({

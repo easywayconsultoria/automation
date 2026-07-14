@@ -6,6 +6,7 @@ import {
   importInvoiceCsv,
   runProcessAnalysis,
   saveDrawback,
+  setProcessSupplier,
   uploadProcessDocument
 } from "@/app/actions/domain";
 import { requireProcess } from "@/lib/auth/context";
@@ -26,7 +27,7 @@ export default async function ProcessPage({
 }) {
   const { processId } = await params;
   const { workspace } = await requireProcess(processId);
-  const [process, catalog] = await Promise.all([
+  const [process, catalog, suppliers] = await Promise.all([
     prisma.importProcess.findFirst({
       where: { id: processId, workspaceId: workspace.id },
       include: {
@@ -39,12 +40,17 @@ export default async function ProcessPage({
           orderBy: [{ severity: "desc" }, { createdAt: "desc" }]
         },
         actionPlan: { include: { items: { orderBy: { createdAt: "asc" } } } },
-        drawback: true
+        drawback: true,
+        supplier: true
       }
     }),
     prisma.productCatalog.findMany({
       where: { workspaceId: workspace.id, active: true },
       orderBy: { internalCode: "asc" }
+    }),
+    prisma.supplier.findMany({
+      where: { workspaceId: workspace.id, active: true },
+      orderBy: { name: "asc" }
     })
   ]);
   if (!process) return null;
@@ -88,6 +94,35 @@ export default async function ProcessPage({
           {message}
         </p>
       )}
+      <form
+        action={setProcessSupplier}
+        className="mt-5 flex flex-wrap items-end gap-3 rounded-xl border bg-white p-4"
+      >
+        <input type="hidden" name="processId" value={process.id} />
+        <label className="min-w-64 flex-1 text-sm font-medium">
+          Fornecedor do processo
+          <select
+            name="supplierId"
+            defaultValue={process.supplierId ?? ""}
+            className="mt-2 w-full rounded-lg border px-3 py-2"
+          >
+            <option value="">Não definido — aliases globais</option>
+            {suppliers.map((supplier) => (
+              <option key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="rounded-lg border px-4 py-2 text-sm font-semibold">
+          Atualizar fornecedor
+        </button>
+        {process.supplier && (
+          <span className="pb-2 text-xs text-slate-500">
+            Contexto atual: {process.supplier.name}
+          </span>
+        )}
+      </form>
       <nav className="mt-8 flex gap-4 overflow-x-auto border-b text-sm font-medium">
         <a href="#items" className="pb-3">
           Itens

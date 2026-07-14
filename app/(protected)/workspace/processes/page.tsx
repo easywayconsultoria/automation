@@ -16,15 +16,22 @@ export default async function ProcessesPage({
   searchParams: Promise<{ message?: string }>;
 }) {
   const { workspace } = await requireWorkspace();
-  const processes = await prisma.importProcess.findMany({
-    where: { workspaceId: workspace.id },
-    orderBy: { createdAt: "desc" },
-    include: {
-      _count: {
-        select: { items: true, inconsistencies: true, documents: true }
+  const [processes, suppliers] = await Promise.all([
+    prisma.importProcess.findMany({
+      where: { workspaceId: workspace.id },
+      orderBy: { createdAt: "desc" },
+      include: {
+        supplier: true,
+        _count: {
+          select: { items: true, inconsistencies: true, documents: true }
+        }
       }
-    }
-  });
+    }),
+    prisma.supplier.findMany({
+      where: { workspaceId: workspace.id, active: true },
+      orderBy: { name: "asc" }
+    })
+  ]);
   const { message } = await searchParams;
   return (
     <>
@@ -54,6 +61,9 @@ export default async function ProcessesPage({
                     <p className="font-semibold">{process.reference}</p>
                     <p className="mt-1 text-sm text-slate-600">
                       {process.clientName}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Fornecedor: {process.supplier?.name ?? "não definido"}
                     </p>
                   </div>
                   <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium">
@@ -85,6 +95,20 @@ export default async function ProcessesPage({
           />
           <Field name="clientName" label="Cliente *" required />
           <Field name="exporterName" label="Exportador" />
+          <label className="block text-sm font-medium text-slate-700">
+            Fornecedor
+            <select
+              name="supplierId"
+              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2"
+            >
+              <option value="">Não definido</option>
+              {suppliers.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="grid grid-cols-2 gap-3">
             <Field name="originCountry" label="País de origem" />
             <Field name="incoterm" label="Incoterm" />
