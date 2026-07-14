@@ -21,6 +21,13 @@ export default async function LayoutAdminPage({
 }) {
   const { workspace } = await requireLayoutAdmin();
   const { q = "", message } = await searchParams;
+  const normalizedQuery = q.trim().toUpperCase();
+  const typeQuery: "PORTAL_UNICO" | "DRAWBACK" | null =
+    normalizedQuery.includes("PORTAL")
+      ? "PORTAL_UNICO"
+      : normalizedQuery.includes("DRAWBACK")
+        ? "DRAWBACK"
+        : null;
   const layouts = await prisma.csvLayoutDefinition.findMany({
     where: {
       AND: [
@@ -30,7 +37,8 @@ export default async function LayoutAdminPage({
               {
                 OR: [
                   { name: { contains: q, mode: "insensitive" as const } },
-                  { version: { contains: q, mode: "insensitive" as const } }
+                  { version: { contains: q, mode: "insensitive" as const } },
+                  ...(typeQuery ? [{ type: typeQuery }] : [])
                 ]
               }
             ]
