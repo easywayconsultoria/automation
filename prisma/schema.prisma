@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model UserProfile {
+  id          String            @id @db.Uuid
+  email       String
+  displayName String?           @map("display_name")
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+  memberships WorkspaceMember[]
+  owned       Workspace[]       @relation("WorkspaceOwner")
+  auditLogs   AuditLog[]        @relation("AuditActor")
+
+  @@map("user_profiles")
+}
+
+model Workspace {
+  id        String            @id @default(uuid()) @db.Uuid
+  name      String
+  ownerId   String            @unique @db.Uuid @map("owner_id")
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+  owner     UserProfile       @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members   WorkspaceMember[]
+  auditLogs AuditLog[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid()) @db.Uuid
+  workspaceId String        @db.Uuid @map("workspace_id")
+  userId      String        @db.Uuid @map("user_id")
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        UserProfile   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model AuditLog {
+  id          String       @id @default(uuid()) @db.Uuid
+  workspaceId String?      @db.Uuid @map("workspace_id")
+  actorId     String?      @db.Uuid @map("actor_id")
+  event       String
+  metadata    Json?
+  createdAt   DateTime     @default(now()) @map("created_at")
+  workspace   Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  actor       UserProfile? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}

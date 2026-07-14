@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.vercel/
+.env
+.env.local
+.env.*.local
+!.env.example
+coverage/
+*.log
+*.tsbuildinfo
+.DS_Store
+prisma/dev.db
+.vercel
