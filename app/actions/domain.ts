@@ -140,8 +140,9 @@ async function hasAliasConflict(
   const description = normalizeProductText(data.supplierDescription);
   return aliases.some(
     (alias) =>
-      normalizeProductText(alias.supplierCode) === code &&
-      normalizeProductText(alias.supplierDescription) === description
+      (code && normalizeProductText(alias.supplierCode) === code) ||
+      (description &&
+        normalizeProductText(alias.supplierDescription) === description)
   );
 }
 
@@ -229,8 +230,9 @@ export async function classifyInvoiceItem(formData: FormData) {
       const description = normalizeProductText(item.description);
       const duplicate = aliases.some(
         (alias) =>
-          normalizeProductText(alias.supplierCode) === code &&
-          normalizeProductText(alias.supplierDescription) === description
+          (code && normalizeProductText(alias.supplierCode) === code) ||
+          (description &&
+            normalizeProductText(alias.supplierDescription) === description)
       );
       if (!duplicate && (code || description)) {
         await tx.productAlias.create({

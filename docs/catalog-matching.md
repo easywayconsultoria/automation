@@ -10,7 +10,7 @@ Cada produto possui código interno, descrição, NCM, unidade padrão e estado 
 
 Na mesma área, aliases podem ser buscados por código ou descrição do fornecedor, criados e editados. Todo alias aponta para um produto do mesmo workspace e deve informar ao menos código ou descrição. `confidenceHint` aceita valores entre 0 e 1 e é apenas informativo nesta etapa.
 
-Aliases com a mesma combinação normalizada de código e descrição são rejeitados no workspace para evitar decisões ambíguas.
+Aliases com o mesmo código normalizado ou a mesma descrição normalizada são rejeitados no workspace para evitar decisões ambíguas em qualquer etapa do matching.
 
 ## Regras de matching
 
