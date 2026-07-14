@@ -2,6 +2,9 @@
 
 Base de produção do sistema operacional da EasyWay: Next.js 15, Supabase Auth, PostgreSQL e Prisma.
 
+- Repositório oficial: `easywayconsultoria/automation`
+- Produção: `https://easyway-ai.vercel.app`
+
 ## Setup local
 
 Requer Node 20 (a versão está em `.nvmrc`) e acesso ao projeto Supabase.
