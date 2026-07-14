@@ -8,6 +8,7 @@ import { requireProcess } from "@/lib/auth/context";
 import { writeAudit } from "@/lib/audit/write";
 import { prisma } from "@/lib/db/prisma";
 import { parseDrawbackCsv, parsePortalCsv } from "@/lib/domain/government-csv";
+import { matchInvoiceItem } from "@/lib/domain/analysis";
 import {
   processTools,
   runConversationTurn
@@ -209,6 +210,133 @@ export async function transitionSuggestedAction(formData: FormData) {
   redirect(path(processId, "Status da sugestão atualizado."));
 }
 
+export async function reviewRegistrationProposal(formData: FormData) {
+  const processId = String(formData.get("processId") ?? "");
+  const proposalId = String(formData.get("proposalId") ?? "");
+  const intent = z
+    .enum(["SAVE", "ACCEPT", "DISMISS", "CONVERT"])
+    .safeParse(formData.get("intent"));
+  const fields = z
+    .object({
+      suggestedProductCode: z.string().trim().min(1).max(120),
+      suggestedDescription: z.string().trim().min(2).max(500),
+      suggestedNcm: z.string().trim().max(20).optional()
+    })
+    .safeParse({
+      suggestedProductCode: formData.get("suggestedProductCode"),
+      suggestedDescription: formData.get("suggestedDescription"),
+      suggestedNcm:
+        String(formData.get("suggestedNcm") ?? "").trim() || undefined
+    });
+  if (!intent.success || !fields.success)
+    redirect(path(processId, "Revisão da proposta inválida."));
+  const { user, workspace } = await requireProcess(processId);
+  const proposal = await prisma.registrationProposal.findFirst({
+    where: {
+      id: proposalId,
+      workspaceId: workspace.id,
+      importProcessId: processId
+    }
+  });
+  if (!proposal) redirect(path(processId, "Proposta não encontrada."));
+  const target =
+    intent.data === "ACCEPT"
+      ? "ACCEPTED"
+      : intent.data === "DISMISS"
+        ? "DISMISSED"
+        : intent.data === "CONVERT"
+          ? "CONVERTED"
+          : proposal.status;
+  if (intent.data === "CONVERT" && proposal.status !== "ACCEPTED")
+    redirect(path(processId, "Aceite a proposta antes de convertê-la."));
+  if (
+    intent.data === "ACCEPT" &&
+    !["DRAFT", "PENDING_REVIEW"].includes(proposal.status)
+  )
+    redirect(path(processId, "A proposta não está disponível para aceite."));
+  if (
+    intent.data === "SAVE" &&
+    !["DRAFT", "PENDING_REVIEW"].includes(proposal.status)
+  )
+    redirect(path(processId, "A proposta não está disponível para edição."));
+  if (
+    intent.data === "DISMISS" &&
+    !["DRAFT", "PENDING_REVIEW", "ACCEPTED"].includes(proposal.status)
+  )
+    redirect(path(processId, "A proposta não pode ser dispensada."));
+  await prisma.$transaction(async (tx) => {
+    await tx.registrationProposal.updateMany({
+      where: {
+        id: proposal.id,
+        workspaceId: workspace.id,
+        importProcessId: processId
+      },
+      data: {
+        ...fields.data,
+        suggestedNcm: fields.data.suggestedNcm ?? null,
+        status: target,
+        reviewedById:
+          target === "ACCEPTED" ||
+          target === "DISMISSED" ||
+          target === "CONVERTED"
+            ? user.id
+            : proposal.reviewedById,
+        reviewedAt:
+          target === "ACCEPTED" ||
+          target === "DISMISSED" ||
+          target === "CONVERTED"
+            ? new Date()
+            : proposal.reviewedAt
+      }
+    });
+    await tx.registrationProposalEvent.create({
+      data: {
+        registrationProposalId: proposal.id,
+        workspaceId: workspace.id,
+        importProcessId: processId,
+        fromStatus: proposal.status,
+        toStatus: target,
+        changes: fields.data,
+        reason: String(formData.get("reason") ?? "").trim() || null,
+        actorId: user.id
+      }
+    });
+    if (target === "CONVERTED") {
+      const conversation = await tx.conversation.findFirst({
+        where: { workspaceId: workspace.id, importProcessId: processId },
+        select: { id: true }
+      });
+      if (conversation)
+        await tx.suggestedAction.create({
+          data: {
+            conversationId: conversation.id,
+            workspaceId: workspace.id,
+            importProcessId: processId,
+            type: `REGISTRATION_PROPOSAL_${proposal.id}`,
+            title: `Cadastrar produto ${fields.data.suggestedProductCode}`,
+            description: `${fields.data.suggestedDescription}${fields.data.suggestedNcm ? ` · NCM ${fields.data.suggestedNcm}` : ""}`,
+            status: "ACCEPTED"
+          }
+        });
+    }
+  });
+  await writeAudit("registration_proposal_reviewed", user.id, workspace.id, {
+    processId,
+    proposalId,
+    from: proposal.status,
+    to: target,
+    intent: intent.data
+  });
+  redirect(
+    path(
+      processId,
+      intent.data === "CONVERT"
+        ? "Proposta convertida em ação operacional."
+        : "Proposta revisada."
+    )
+  );
+}
+
 export async function parseConversationCsv(formData: FormData) {
   const processId = String(formData.get("processId") ?? "");
   const attachmentId = String(formData.get("attachmentId") ?? "");
@@ -234,9 +362,55 @@ export async function parseConversationCsv(formData: FormData) {
     ? parsePortalCsv(await data.text())
     : parseDrawbackCsv(await data.text());
   const invalidRows = new Set(result.errors.map((item) => item.line)).size;
-  const processItems = await prisma.invoiceItem.findMany({
-    where: { workspaceId: workspace.id, importProcessId: processId }
-  });
+  const [processItems, products, process, layout] = await Promise.all([
+    prisma.invoiceItem.findMany({
+      where: { workspaceId: workspace.id, importProcessId: processId }
+    }),
+    prisma.productCatalog.findMany({
+      where: { workspaceId: workspace.id, active: true },
+      include: { aliases: true }
+    }),
+    prisma.importProcess.findFirst({
+      where: { id: processId, workspaceId: workspace.id },
+      select: { supplierId: true }
+    }),
+    result.detectedVersion
+      ? prisma.csvLayoutDefinition.findFirst({
+          where: {
+            type: isPortal ? "PORTAL_UNICO" : "DRAWBACK",
+            version: result.detectedVersion,
+            active: true,
+            OR: [{ workspaceId: workspace.id }, { workspaceId: null }]
+          }
+        })
+      : null
+  ]);
+  const importStatus = !result.detectedVersion
+    ? "FAILED"
+    : result.errors.length
+      ? "COMPLETED_WITH_ERRORS"
+      : "COMPLETED";
+  const portalCodes = new Map(
+    result.rows.map((row) => [
+      String(row.productCode).trim().toUpperCase(),
+      row
+    ])
+  );
+  const proposalItems = isPortal
+    ? processItems.filter((item) => {
+        const row = portalCodes.get(
+          item.supplierCode?.trim().toUpperCase() ?? ""
+        );
+        const portalGap =
+          !row ||
+          !["REGISTERED", "ATIVO", "CADASTRADO"].includes(
+            String(row.registrationStatus)
+          );
+        return (
+          portalGap || !matchInvoiceItem(item, products, process?.supplierId)
+        );
+      })
+    : [];
   const toolName = isPortal ? "parse_portal_csv" : "parse_drawback_csv";
   await prisma.$transaction(async (tx) => {
     if (isPortal) {
@@ -246,7 +420,9 @@ export async function parseConversationCsv(formData: FormData) {
           workspaceId: workspace.id,
           importProcessId: processId,
           processDocumentId: attachment.processDocumentId!,
-          status: result.errors.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED",
+          status: importStatus,
+          csvLayoutId: layout?.id,
+          detectedVersion: result.detectedVersion,
           header: result.header,
           errors: result.errors,
           validRows: result.rows.length,
@@ -254,7 +430,9 @@ export async function parseConversationCsv(formData: FormData) {
           processedAt: new Date()
         },
         update: {
-          status: result.errors.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED",
+          status: importStatus,
+          csvLayoutId: layout?.id,
+          detectedVersion: result.detectedVersion,
           header: result.header,
           errors: result.errors,
           validRows: result.rows.length,
@@ -286,7 +464,9 @@ export async function parseConversationCsv(formData: FormData) {
           workspaceId: workspace.id,
           importProcessId: processId,
           processDocumentId: attachment.processDocumentId!,
-          status: result.errors.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED",
+          status: importStatus,
+          csvLayoutId: layout?.id,
+          detectedVersion: result.detectedVersion,
           header: result.header,
           errors: result.errors,
           validRows: result.rows.length,
@@ -294,7 +474,9 @@ export async function parseConversationCsv(formData: FormData) {
           processedAt: new Date()
         },
         update: {
-          status: result.errors.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED",
+          status: importStatus,
+          csvLayoutId: layout?.id,
+          detectedVersion: result.detectedVersion,
           header: result.header,
           errors: result.errors,
           validRows: result.rows.length,
@@ -346,9 +528,10 @@ export async function parseConversationCsv(formData: FormData) {
         conversationId: attachment.conversationId,
         workspaceId: workspace.id,
         role: "ASSISTANT",
-        content: `${isPortal ? "Portal Único" : "Drawback"}: ${result.rows.length} linhas válidas e ${result.errors.length} erros de validação.`,
+        content: `${isPortal ? "Portal Único" : "Drawback"}: layout ${result.detectedVersion ?? "desconhecido"}, ${result.rows.length} linhas válidas e ${result.errors.length} erros de validação.`,
         structuredData: {
           toolName,
+          detectedVersion: result.detectedVersion,
           criteria: "Validação determinística de cabeçalho e linhas",
           sources: [attachment.label],
           limitations: [
@@ -413,6 +596,66 @@ export async function parseConversationCsv(formData: FormData) {
           sourceMessageId: assistantMessage.id
         }))
       });
+    if (isPortal) {
+      const portalImport = await tx.portalCsvImport.findUnique({
+        where: { processDocumentId: attachment.processDocumentId! }
+      });
+      for (const item of proposalItems) {
+        const row = portalCodes.get(
+          item.supplierCode?.trim().toUpperCase() ?? ""
+        );
+        const portalGap =
+          !row ||
+          !["REGISTERED", "ATIVO", "CADASTRADO"].includes(
+            String(row.registrationStatus)
+          );
+        const unmatched = !matchInvoiceItem(
+          item,
+          products,
+          process?.supplierId
+        );
+        const values = {
+          portalCsvImportId: portalImport?.id,
+          suggestedProductCode: item.supplierCode ?? `ITEM-${item.lineNumber}`,
+          suggestedDescription: item.description,
+          suggestedNcm: item.ncm,
+          rationale: [
+            portalGap
+              ? `Sem cadastro ativo no layout Portal Único ${result.detectedVersion ?? "desconhecido"}.`
+              : null,
+            unmatched ? "Sem correspondência válida no catálogo interno." : null
+          ]
+            .filter(Boolean)
+            .join(" ")
+        };
+        const existing = await tx.registrationProposal.findFirst({
+          where: {
+            workspaceId: workspace.id,
+            importProcessId: processId,
+            sourceItemId: item.id
+          }
+        });
+        if (!existing)
+          await tx.registrationProposal.create({
+            data: {
+              workspaceId: workspace.id,
+              importProcessId: processId,
+              sourceItemId: item.id,
+              createdById: user.id,
+              ...values
+            }
+          });
+        else if (["DRAFT", "PENDING_REVIEW"].includes(existing.status))
+          await tx.registrationProposal.updateMany({
+            where: {
+              id: existing.id,
+              workspaceId: workspace.id,
+              importProcessId: processId
+            },
+            data: values
+          });
+      }
+    }
   });
   await writeAudit("conversation_csv_parsed", user.id, workspace.id, {
     processId,

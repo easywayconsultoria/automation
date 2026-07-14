@@ -139,54 +139,73 @@ enum CsvImportStatus {
   FAILED
 }
 
+enum CsvLayoutType {
+  PORTAL_UNICO
+  DRAWBACK
+}
+
+enum RegistrationProposalStatus {
+  DRAFT
+  PENDING_REVIEW
+  ACCEPTED
+  DISMISSED
+  CONVERTED
+}
+
 model UserProfile {
-  id                      String                   @id @db.Uuid
-  email                   String
-  displayName             String?                  @map("display_name")
-  createdAt               DateTime                 @default(now()) @map("created_at")
-  updatedAt               DateTime                 @updatedAt @map("updated_at")
-  memberships             WorkspaceMember[]
-  owned                   Workspace[]              @relation("WorkspaceOwner")
-  auditLogs               AuditLog[]               @relation("AuditActor")
-  createdProcesses        ImportProcess[]          @relation("ProcessCreator")
-  uploadedDocuments       ProcessDocument[]        @relation("DocumentUploader")
-  conversations           Conversation[]           @relation("ConversationCreator")
-  conversationMessages    ConversationMessage[]    @relation("ConversationMessageCreator")
-  conversationAttachments ConversationAttachment[] @relation("ConversationAttachmentCreator")
-  suggestedActionEvents   SuggestedActionEvent[]   @relation("SuggestedActionEventActor")
+  id                            String                      @id @db.Uuid
+  email                         String
+  displayName                   String?                     @map("display_name")
+  createdAt                     DateTime                    @default(now()) @map("created_at")
+  updatedAt                     DateTime                    @updatedAt @map("updated_at")
+  memberships                   WorkspaceMember[]
+  owned                         Workspace[]                 @relation("WorkspaceOwner")
+  auditLogs                     AuditLog[]                  @relation("AuditActor")
+  createdProcesses              ImportProcess[]             @relation("ProcessCreator")
+  uploadedDocuments             ProcessDocument[]           @relation("DocumentUploader")
+  conversations                 Conversation[]              @relation("ConversationCreator")
+  conversationMessages          ConversationMessage[]       @relation("ConversationMessageCreator")
+  conversationAttachments       ConversationAttachment[]    @relation("ConversationAttachmentCreator")
+  suggestedActionEvents         SuggestedActionEvent[]      @relation("SuggestedActionEventActor")
+  createdRegistrationProposals  RegistrationProposal[]      @relation("RegistrationProposalCreator")
+  reviewedRegistrationProposals RegistrationProposal[]      @relation("RegistrationProposalReviewer")
+  registrationProposalEvents    RegistrationProposalEvent[] @relation("RegistrationProposalEventActor")
 
   @@map("user_profiles")
 }
 
 model Workspace {
-  id                      String                   @id @default(uuid()) @db.Uuid
-  name                    String
-  ownerId                 String                   @unique @map("owner_id") @db.Uuid
-  createdAt               DateTime                 @default(now()) @map("created_at")
-  updatedAt               DateTime                 @updatedAt @map("updated_at")
-  owner                   UserProfile              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  members                 WorkspaceMember[]
-  auditLogs               AuditLog[]
-  importProcesses         ImportProcess[]
-  processDocuments        ProcessDocument[]
-  invoiceItems            InvoiceItem[]
-  products                ProductCatalog[]
-  productAliases          ProductAlias[]
-  inconsistencies         Inconsistency[]
-  actionPlans             ActionPlan[]
-  actionPlanItems         ActionPlanItem[]
-  drawbackRecords         DrawbackRecord[]
-  suppliers               Supplier[]
-  conversations           Conversation[]
-  conversationMessages    ConversationMessage[]
-  conversationAttachments ConversationAttachment[]
-  toolExecutions          ToolExecution[]
-  suggestedActions        SuggestedAction[]
-  suggestedActionEvents   SuggestedActionEvent[]
-  portalCsvImports        PortalCsvImport[]
-  portalCsvRows           PortalCsvRow[]
-  drawbackCsvImports      DrawbackCsvImport[]
-  drawbackCsvRows         DrawbackCsvRow[]
+  id                         String                      @id @default(uuid()) @db.Uuid
+  name                       String
+  ownerId                    String                      @unique @map("owner_id") @db.Uuid
+  createdAt                  DateTime                    @default(now()) @map("created_at")
+  updatedAt                  DateTime                    @updatedAt @map("updated_at")
+  owner                      UserProfile                 @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members                    WorkspaceMember[]
+  auditLogs                  AuditLog[]
+  importProcesses            ImportProcess[]
+  processDocuments           ProcessDocument[]
+  invoiceItems               InvoiceItem[]
+  products                   ProductCatalog[]
+  productAliases             ProductAlias[]
+  inconsistencies            Inconsistency[]
+  actionPlans                ActionPlan[]
+  actionPlanItems            ActionPlanItem[]
+  drawbackRecords            DrawbackRecord[]
+  suppliers                  Supplier[]
+  conversations              Conversation[]
+  conversationMessages       ConversationMessage[]
+  conversationAttachments    ConversationAttachment[]
+  toolExecutions             ToolExecution[]
+  suggestedActions           SuggestedAction[]
+  suggestedActionEvents      SuggestedActionEvent[]
+  portalCsvImports           PortalCsvImport[]
+  portalCsvRows              PortalCsvRow[]
+  drawbackCsvImports         DrawbackCsvImport[]
+  drawbackCsvRows            DrawbackCsvRow[]
+  csvLayouts                 CsvLayoutDefinition[]
+  registrationProposals      RegistrationProposal[]
+  registrationProposalEvents RegistrationProposalEvent[]
 
   @@map("workspaces")
 }
@@ -221,37 +240,39 @@ model AuditLog {
 }
 
 model ImportProcess {
-  id                      String                   @id @default(uuid()) @db.Uuid
-  workspaceId             String                   @map("workspace_id") @db.Uuid
-  reference               String
-  clientName              String                   @map("client_name")
-  exporterName            String?                  @map("exporter_name")
-  status                  ImportProcessStatus      @default(DRAFT)
-  originCountry           String?                  @map("origin_country")
-  incoterm                String?
-  invoiceNumber           String?                  @map("invoice_number")
-  notes                   String?
-  createdById             String                   @map("created_by") @db.Uuid
-  supplierId              String?                  @map("supplier_id") @db.Uuid
-  createdAt               DateTime                 @default(now()) @map("created_at")
-  updatedAt               DateTime                 @updatedAt @map("updated_at")
-  workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy               UserProfile              @relation("ProcessCreator", fields: [createdById], references: [id])
-  supplier                Supplier?                @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  documents               ProcessDocument[]
-  items                   InvoiceItem[]
-  inconsistencies         Inconsistency[]
-  actionPlan              ActionPlan?
-  drawback                DrawbackRecord?
-  conversation            Conversation?
-  conversationAttachments ConversationAttachment[]
-  toolExecutions          ToolExecution[]
-  suggestedActions        SuggestedAction[]
-  suggestedActionEvents   SuggestedActionEvent[]
-  portalCsvImports        PortalCsvImport[]
-  portalCsvRows           PortalCsvRow[]
-  drawbackCsvImports      DrawbackCsvImport[]
-  drawbackCsvRows         DrawbackCsvRow[]
+  id                         String                      @id @default(uuid()) @db.Uuid
+  workspaceId                String                      @map("workspace_id") @db.Uuid
+  reference                  String
+  clientName                 String                      @map("client_name")
+  exporterName               String?                     @map("exporter_name")
+  status                     ImportProcessStatus         @default(DRAFT)
+  originCountry              String?                     @map("origin_country")
+  incoterm                   String?
+  invoiceNumber              String?                     @map("invoice_number")
+  notes                      String?
+  createdById                String                      @map("created_by") @db.Uuid
+  supplierId                 String?                     @map("supplier_id") @db.Uuid
+  createdAt                  DateTime                    @default(now()) @map("created_at")
+  updatedAt                  DateTime                    @updatedAt @map("updated_at")
+  workspace                  Workspace                   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy                  UserProfile                 @relation("ProcessCreator", fields: [createdById], references: [id])
+  supplier                   Supplier?                   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  documents                  ProcessDocument[]
+  items                      InvoiceItem[]
+  inconsistencies            Inconsistency[]
+  actionPlan                 ActionPlan?
+  drawback                   DrawbackRecord?
+  conversation               Conversation?
+  conversationAttachments    ConversationAttachment[]
+  toolExecutions             ToolExecution[]
+  suggestedActions           SuggestedAction[]
+  suggestedActionEvents      SuggestedActionEvent[]
+  portalCsvImports           PortalCsvImport[]
+  portalCsvRows              PortalCsvRow[]
+  drawbackCsvImports         DrawbackCsvImport[]
+  drawbackCsvRows            DrawbackCsvRow[]
+  registrationProposals      RegistrationProposal[]
+  registrationProposalEvents RegistrationProposalEvent[]
 
   @@unique([workspaceId, reference])
   @@index([workspaceId, status, createdAt])
@@ -285,31 +306,32 @@ model ProcessDocument {
 }
 
 model InvoiceItem {
-  id                String           @id @default(uuid()) @db.Uuid
-  workspaceId       String           @map("workspace_id") @db.Uuid
-  importProcessId   String           @map("import_process_id") @db.Uuid
-  processDocumentId String?          @map("process_document_id") @db.Uuid
-  productCatalogId  String?          @map("product_catalog_id") @db.Uuid
-  lineNumber        Int              @map("line_number")
-  supplierCode      String?          @map("supplier_code")
-  description       String
-  ncm               String?
-  quantity          Decimal          @db.Decimal(18, 6)
-  unit              String?
-  unitPrice         Decimal          @map("unit_price") @db.Decimal(18, 6)
-  totalPrice        Decimal          @map("total_price") @db.Decimal(18, 2)
-  grossWeight       Decimal?         @map("gross_weight") @db.Decimal(18, 6)
-  netWeight         Decimal?         @map("net_weight") @db.Decimal(18, 6)
-  currency          String           @default("USD")
-  countryOfOrigin   String?          @map("country_of_origin")
-  rawData           Json?            @map("raw_data")
-  createdAt         DateTime         @default(now()) @map("created_at")
-  updatedAt         DateTime         @updatedAt @map("updated_at")
-  workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  importProcess     ImportProcess    @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
-  processDocument   ProcessDocument? @relation(fields: [processDocumentId], references: [id], onDelete: SetNull)
-  productCatalog    ProductCatalog?  @relation(fields: [productCatalogId], references: [id], onDelete: SetNull)
-  inconsistencies   Inconsistency[]
+  id                    String                 @id @default(uuid()) @db.Uuid
+  workspaceId           String                 @map("workspace_id") @db.Uuid
+  importProcessId       String                 @map("import_process_id") @db.Uuid
+  processDocumentId     String?                @map("process_document_id") @db.Uuid
+  productCatalogId      String?                @map("product_catalog_id") @db.Uuid
+  lineNumber            Int                    @map("line_number")
+  supplierCode          String?                @map("supplier_code")
+  description           String
+  ncm                   String?
+  quantity              Decimal                @db.Decimal(18, 6)
+  unit                  String?
+  unitPrice             Decimal                @map("unit_price") @db.Decimal(18, 6)
+  totalPrice            Decimal                @map("total_price") @db.Decimal(18, 2)
+  grossWeight           Decimal?               @map("gross_weight") @db.Decimal(18, 6)
+  netWeight             Decimal?               @map("net_weight") @db.Decimal(18, 6)
+  currency              String                 @default("USD")
+  countryOfOrigin       String?                @map("country_of_origin")
+  rawData               Json?                  @map("raw_data")
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+  workspace             Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess         ImportProcess          @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  processDocument       ProcessDocument?       @relation(fields: [processDocumentId], references: [id], onDelete: SetNull)
+  productCatalog        ProductCatalog?        @relation(fields: [productCatalogId], references: [id], onDelete: SetNull)
+  inconsistencies       Inconsistency[]
+  registrationProposals RegistrationProposal[]
 
   @@unique([importProcessId, lineNumber])
   @@index([workspaceId, importProcessId])
@@ -578,22 +600,26 @@ model SuggestedActionEvent {
 }
 
 model PortalCsvImport {
-  id                String          @id @default(uuid()) @db.Uuid
-  workspaceId       String          @map("workspace_id") @db.Uuid
-  importProcessId   String          @map("import_process_id") @db.Uuid
-  processDocumentId String          @unique @map("process_document_id") @db.Uuid
-  status            CsvImportStatus @default(PROCESSING)
-  header            Json?
-  errors            Json?
-  validRows         Int             @default(0) @map("valid_rows")
-  invalidRows       Int             @default(0) @map("invalid_rows")
-  processedAt       DateTime?       @map("processed_at")
-  createdAt         DateTime        @default(now()) @map("created_at")
-  updatedAt         DateTime        @updatedAt @map("updated_at")
-  workspace         Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  importProcess     ImportProcess   @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
-  processDocument   ProcessDocument @relation(fields: [processDocumentId], references: [id], onDelete: Cascade)
-  rows              PortalCsvRow[]
+  id                    String                 @id @default(uuid()) @db.Uuid
+  workspaceId           String                 @map("workspace_id") @db.Uuid
+  importProcessId       String                 @map("import_process_id") @db.Uuid
+  processDocumentId     String                 @unique @map("process_document_id") @db.Uuid
+  csvLayoutId           String?                @map("csv_layout_id") @db.Uuid
+  detectedVersion       String?                @map("detected_version")
+  status                CsvImportStatus        @default(PROCESSING)
+  header                Json?
+  errors                Json?
+  validRows             Int                    @default(0) @map("valid_rows")
+  invalidRows           Int                    @default(0) @map("invalid_rows")
+  processedAt           DateTime?              @map("processed_at")
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+  workspace             Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess         ImportProcess          @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  processDocument       ProcessDocument        @relation(fields: [processDocumentId], references: [id], onDelete: Cascade)
+  csvLayout             CsvLayoutDefinition?   @relation(fields: [csvLayoutId], references: [id], onDelete: SetNull)
+  rows                  PortalCsvRow[]
+  registrationProposals RegistrationProposal[]
 
   @@index([workspaceId, importProcessId, status])
   @@map("portal_csv_imports")
@@ -619,21 +645,24 @@ model PortalCsvRow {
 }
 
 model DrawbackCsvImport {
-  id                String           @id @default(uuid()) @db.Uuid
-  workspaceId       String           @map("workspace_id") @db.Uuid
-  importProcessId   String           @map("import_process_id") @db.Uuid
-  processDocumentId String           @unique @map("process_document_id") @db.Uuid
-  status            CsvImportStatus  @default(PROCESSING)
+  id                String               @id @default(uuid()) @db.Uuid
+  workspaceId       String               @map("workspace_id") @db.Uuid
+  importProcessId   String               @map("import_process_id") @db.Uuid
+  processDocumentId String               @unique @map("process_document_id") @db.Uuid
+  csvLayoutId       String?              @map("csv_layout_id") @db.Uuid
+  detectedVersion   String?              @map("detected_version")
+  status            CsvImportStatus      @default(PROCESSING)
   header            Json?
   errors            Json?
-  validRows         Int              @default(0) @map("valid_rows")
-  invalidRows       Int              @default(0) @map("invalid_rows")
-  processedAt       DateTime?        @map("processed_at")
-  createdAt         DateTime         @default(now()) @map("created_at")
-  updatedAt         DateTime         @updatedAt @map("updated_at")
-  workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  importProcess     ImportProcess    @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
-  processDocument   ProcessDocument  @relation(fields: [processDocumentId], references: [id], onDelete: Cascade)
+  validRows         Int                  @default(0) @map("valid_rows")
+  invalidRows       Int                  @default(0) @map("invalid_rows")
+  processedAt       DateTime?            @map("processed_at")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+  workspace         Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess     ImportProcess        @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  processDocument   ProcessDocument      @relation(fields: [processDocumentId], references: [id], onDelete: Cascade)
+  csvLayout         CsvLayoutDefinition? @relation(fields: [csvLayoutId], references: [id], onDelete: SetNull)
   rows              DrawbackCsvRow[]
 
   @@index([workspaceId, importProcessId, status])
@@ -660,4 +689,77 @@ model DrawbackCsvRow {
 
   @@index([workspaceId, importProcessId, productCode])
   @@map("drawback_csv_rows")
+}
+
+model CsvLayoutDefinition {
+  id              String              @id @default(uuid()) @db.Uuid
+  workspaceId     String?             @map("workspace_id") @db.Uuid
+  name            String
+  type            CsvLayoutType
+  version         String
+  active          Boolean             @default(true)
+  requiredColumns Json                @map("required_columns")
+  optionalColumns Json                @map("optional_columns")
+  expectedOrder   Json                @map("expected_order")
+  validationRules Json                @map("validation_rules")
+  aliases         Json?
+  description     String
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  workspace       Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  portalImports   PortalCsvImport[]
+  drawbackImports DrawbackCsvImport[]
+
+  @@unique([workspaceId, type, version])
+  @@index([type, active, version])
+  @@map("csv_layout_definitions")
+}
+
+model RegistrationProposal {
+  id                   String                      @id @default(uuid()) @db.Uuid
+  workspaceId          String                      @map("workspace_id") @db.Uuid
+  importProcessId      String                      @map("import_process_id") @db.Uuid
+  portalCsvImportId    String?                     @map("portal_csv_import_id") @db.Uuid
+  sourceItemId         String?                     @map("source_item_id") @db.Uuid
+  suggestedProductCode String                      @map("suggested_product_code")
+  suggestedDescription String                      @map("suggested_description")
+  suggestedNcm         String?                     @map("suggested_ncm")
+  status               RegistrationProposalStatus  @default(PENDING_REVIEW)
+  rationale            String
+  createdById          String                      @map("created_by") @db.Uuid
+  reviewedById         String?                     @map("reviewed_by") @db.Uuid
+  reviewedAt           DateTime?                   @map("reviewed_at")
+  createdAt            DateTime                    @default(now()) @map("created_at")
+  updatedAt            DateTime                    @updatedAt @map("updated_at")
+  workspace            Workspace                   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess        ImportProcess               @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  portalCsvImport      PortalCsvImport?            @relation(fields: [portalCsvImportId], references: [id], onDelete: SetNull)
+  sourceItem           InvoiceItem?                @relation(fields: [sourceItemId], references: [id], onDelete: SetNull)
+  createdBy            UserProfile                 @relation("RegistrationProposalCreator", fields: [createdById], references: [id])
+  reviewedBy           UserProfile?                @relation("RegistrationProposalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  events               RegistrationProposalEvent[]
+
+  @@unique([workspaceId, importProcessId, sourceItemId])
+  @@index([workspaceId, importProcessId, status])
+  @@map("registration_proposals")
+}
+
+model RegistrationProposalEvent {
+  id                     String                     @id @default(uuid()) @db.Uuid
+  registrationProposalId String                     @map("registration_proposal_id") @db.Uuid
+  workspaceId            String                     @map("workspace_id") @db.Uuid
+  importProcessId        String                     @map("import_process_id") @db.Uuid
+  fromStatus             RegistrationProposalStatus @map("from_status")
+  toStatus               RegistrationProposalStatus @map("to_status")
+  changes                Json?
+  reason                 String?
+  actorId                String                     @map("actor_id") @db.Uuid
+  createdAt              DateTime                   @default(now()) @map("created_at")
+  registrationProposal   RegistrationProposal       @relation(fields: [registrationProposalId], references: [id], onDelete: Cascade)
+  workspace              Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importProcess          ImportProcess              @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
+  actor                  UserProfile                @relation("RegistrationProposalEventActor", fields: [actorId], references: [id])
+
+  @@index([workspaceId, registrationProposalId, createdAt])
+  @@map("registration_proposal_events")
 }

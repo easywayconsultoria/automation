@@ -1,5 +1,7 @@
 # Governança determinística, sugestões e CSVs
 
+> O contrato multiversão e a aprovação humana estão documentados em [versioned-layouts-proposals.md](./versioned-layouts-proposals.md).
+
 ## Lifecycle de SuggestedAction
 
 Estados suportados: `OPEN`, `ACCEPTED`, `DISMISSED` e `COMPLETED`. Transições válidas:

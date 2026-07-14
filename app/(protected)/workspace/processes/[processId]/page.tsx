@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   parseConversationCsv,
+  reviewRegistrationProposal,
   runConversationQuickAction,
   sendConversationMessage,
   transitionSuggestedAction,
@@ -32,51 +33,60 @@ export default async function ProcessPage({
 }) {
   const { processId } = await params;
   const { workspace } = await requireProcess(processId);
-  const [process, catalog, suppliers, conversation] = await Promise.all([
-    prisma.importProcess.findFirst({
-      where: { id: processId, workspaceId: workspace.id },
-      include: {
-        documents: { orderBy: { uploadedAt: "desc" } },
-        items: {
-          orderBy: { lineNumber: "asc" },
-          include: { productCatalog: true }
-        },
-        inconsistencies: {
-          orderBy: [{ severity: "desc" }, { createdAt: "desc" }]
-        },
-        actionPlan: { include: { items: { orderBy: { createdAt: "asc" } } } },
-        drawback: true,
-        supplier: true
-      }
-    }),
-    prisma.productCatalog.findMany({
-      where: { workspaceId: workspace.id, active: true },
-      orderBy: { internalCode: "asc" }
-    }),
-    prisma.supplier.findMany({
-      where: { workspaceId: workspace.id, active: true },
-      orderBy: { name: "asc" }
-    }),
-    prisma.conversation.findFirst({
-      where: { workspaceId: workspace.id, importProcessId: processId },
-      include: {
-        messages: { orderBy: { createdAt: "asc" }, take: 100 },
-        attachments: {
-          orderBy: { createdAt: "desc" },
-          take: 20,
-          include: {
-            processDocument: {
-              include: { portalCsvImports: true, drawbackCsvImports: true }
-            }
-          }
-        },
-        suggestedActions: {
-          orderBy: { createdAt: "desc" },
-          take: 12
+  const [process, catalog, suppliers, conversation, proposals] =
+    await Promise.all([
+      prisma.importProcess.findFirst({
+        where: { id: processId, workspaceId: workspace.id },
+        include: {
+          documents: { orderBy: { uploadedAt: "desc" } },
+          items: {
+            orderBy: { lineNumber: "asc" },
+            include: { productCatalog: true }
+          },
+          inconsistencies: {
+            orderBy: [{ severity: "desc" }, { createdAt: "desc" }]
+          },
+          actionPlan: { include: { items: { orderBy: { createdAt: "asc" } } } },
+          drawback: true,
+          supplier: true
         }
-      }
-    })
-  ]);
+      }),
+      prisma.productCatalog.findMany({
+        where: { workspaceId: workspace.id, active: true },
+        orderBy: { internalCode: "asc" }
+      }),
+      prisma.supplier.findMany({
+        where: { workspaceId: workspace.id, active: true },
+        orderBy: { name: "asc" }
+      }),
+      prisma.conversation.findFirst({
+        where: { workspaceId: workspace.id, importProcessId: processId },
+        include: {
+          messages: { orderBy: { createdAt: "asc" }, take: 100 },
+          attachments: {
+            orderBy: { createdAt: "desc" },
+            take: 20,
+            include: {
+              processDocument: {
+                include: { portalCsvImports: true, drawbackCsvImports: true }
+              }
+            }
+          },
+          suggestedActions: {
+            orderBy: { createdAt: "desc" },
+            take: 12
+          }
+        }
+      }),
+      prisma.registrationProposal.findMany({
+        where: { workspaceId: workspace.id, importProcessId: processId },
+        include: {
+          sourceItem: true,
+          portalCsvImport: { include: { csvLayout: true } }
+        },
+        orderBy: { updatedAt: "desc" }
+      })
+    ]);
   if (!process || !conversation) return null;
   const { message } = await searchParams;
   return (
@@ -259,6 +269,40 @@ export default async function ProcessPage({
                   <p className="text-[10px] text-slate-500">
                     {attachment.kind}
                   </p>
+                  {attachment.processDocument?.portalCsvImports.map((item) => (
+                    <div key={item.id}>
+                      <p className="mt-1 text-[10px] text-slate-600">
+                        Layout {item.detectedVersion ?? "desconhecido"} ·{" "}
+                        {item.status}
+                      </p>
+                      {item.errors && (
+                        <details className="text-[10px] text-red-700">
+                          <summary>Ver erros</summary>
+                          <pre className="whitespace-pre-wrap">
+                            {JSON.stringify(item.errors, null, 2)}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  ))}
+                  {attachment.processDocument?.drawbackCsvImports.map(
+                    (item) => (
+                      <div key={item.id}>
+                        <p className="mt-1 text-[10px] text-slate-600">
+                          Layout {item.detectedVersion ?? "desconhecido"} ·{" "}
+                          {item.status}
+                        </p>
+                        {item.errors && (
+                          <details className="text-[10px] text-red-700">
+                            <summary>Ver erros</summary>
+                            <pre className="whitespace-pre-wrap">
+                              {JSON.stringify(item.errors, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    )
+                  )}
                   {(attachment.kind === "PORTAL_UNICO_CSV" ||
                     attachment.kind === "DRAWBACK_CSV") && (
                     <form action={parseConversationCsv} className="mt-2">
@@ -332,6 +376,104 @@ export default async function ProcessPage({
                       ))}
                     </div>
                   </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {proposals.length > 0 && (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
+              <h3 className="font-semibold text-sky-950">
+                Propostas de cadastro
+              </h3>
+              <div className="mt-3 space-y-4">
+                {proposals.map((proposal) => (
+                  <form
+                    action={reviewRegistrationProposal}
+                    key={proposal.id}
+                    className="rounded-lg border border-sky-200 bg-white p-3"
+                  >
+                    <input type="hidden" name="processId" value={process.id} />
+                    <input
+                      type="hidden"
+                      name="proposalId"
+                      value={proposal.id}
+                    />
+                    <div className="flex justify-between gap-2">
+                      <p className="text-xs font-bold text-sky-950">
+                        Item {proposal.sourceItem?.lineNumber ?? "—"}
+                      </p>
+                      <span className="text-[10px] font-bold text-sky-700">
+                        {proposal.status}
+                      </span>
+                    </div>
+                    <input
+                      name="suggestedProductCode"
+                      defaultValue={proposal.suggestedProductCode}
+                      required
+                      className="mt-2 w-full rounded border px-2 py-1.5 text-xs"
+                      aria-label="Código sugerido"
+                    />
+                    <textarea
+                      name="suggestedDescription"
+                      defaultValue={proposal.suggestedDescription}
+                      required
+                      rows={2}
+                      className="mt-2 w-full rounded border px-2 py-1.5 text-xs"
+                      aria-label="Descrição sugerida"
+                    />
+                    <input
+                      name="suggestedNcm"
+                      defaultValue={proposal.suggestedNcm ?? ""}
+                      className="mt-2 w-full rounded border px-2 py-1.5 text-xs"
+                      placeholder="NCM"
+                    />
+                    <p className="mt-2 text-[10px] text-sky-800">
+                      {proposal.rationale}
+                    </p>
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      Origem: item{" "}
+                      {proposal.sourceItem?.supplierCode ?? "sem código"} ·
+                      layout{" "}
+                      {proposal.portalCsvImport?.detectedVersion ??
+                        "sem versão"}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {proposal.status === "PENDING_REVIEW" && (
+                        <>
+                          <button
+                            name="intent"
+                            value="SAVE"
+                            className="rounded border px-2 py-1 text-[10px] font-semibold"
+                          >
+                            Salvar
+                          </button>
+                          <button
+                            name="intent"
+                            value="ACCEPT"
+                            className="rounded bg-sky-700 px-2 py-1 text-[10px] font-semibold text-white"
+                          >
+                            Aceitar
+                          </button>
+                          <button
+                            name="intent"
+                            value="DISMISS"
+                            className="rounded border px-2 py-1 text-[10px] font-semibold"
+                          >
+                            Dispensar
+                          </button>
+                        </>
+                      )}
+                      {proposal.status === "ACCEPTED" && (
+                        <button
+                          name="intent"
+                          value="CONVERT"
+                          className="rounded bg-ink px-2 py-1 text-[10px] font-semibold text-white"
+                        >
+                          Converter em ação
+                        </button>
+                      )}
+                    </div>
+                  </form>
                 ))}
               </div>
             </div>

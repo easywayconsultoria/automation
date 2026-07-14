@@ -1,18 +1,60 @@
-const PORTAL_HEADERS = [
-  "productCode",
-  "description",
-  "ncm",
-  "registrationStatus"
-] as const;
-const DRAWBACK_HEADERS = [
-  "referenceCode",
-  "productCode",
-  "ncm",
-  "grantedQuantity",
-  "usedQuantity",
-  "availableBalance",
-  "unit"
-] as const;
+type Layout = {
+  version: string;
+  headers: string[];
+  aliases: Record<string, string>;
+};
+
+export const PORTAL_LAYOUTS: Layout[] = [
+  {
+    version: "1.0",
+    headers: ["productCode", "description", "ncm", "registrationStatus"],
+    aliases: {}
+  },
+  {
+    version: "0.9",
+    headers: ["codigo_produto", "descricao", "ncm", "situacao_cadastro"],
+    aliases: {
+      codigo_produto: "productCode",
+      descricao: "description",
+      situacao_cadastro: "registrationStatus"
+    }
+  }
+];
+export const DRAWBACK_LAYOUTS: Layout[] = [
+  {
+    version: "1.0",
+    headers: [
+      "referenceCode",
+      "productCode",
+      "ncm",
+      "grantedQuantity",
+      "usedQuantity",
+      "availableBalance",
+      "unit"
+    ],
+    aliases: {}
+  },
+  {
+    version: "0.9",
+    headers: [
+      "ato_concessorio",
+      "codigo_produto",
+      "ncm",
+      "quantidade_concedida",
+      "quantidade_utilizada",
+      "saldo_disponivel",
+      "unidade"
+    ],
+    aliases: {
+      ato_concessorio: "referenceCode",
+      codigo_produto: "productCode",
+      quantidade_concedida: "grantedQuantity",
+      quantidade_utilizada: "usedQuantity",
+      saldo_disponivel: "availableBalance",
+      unidade: "unit"
+    }
+  }
+];
 
 function lineValues(line: string) {
   const values: string[] = [];
@@ -32,7 +74,6 @@ function lineValues(line: string) {
   values.push(value.trim());
   return values;
 }
-
 function source(content: string) {
   const lines = content
     .replace(/^\uFEFF/, "")
@@ -40,25 +81,44 @@ function source(content: string) {
     .filter((line) => line.trim());
   return { lines, header: lines.length ? lineValues(lines[0]) : [] };
 }
+function detect(header: string[], layouts: Layout[]) {
+  return layouts.find(
+    (layout) =>
+      layout.headers.length === header.length &&
+      layout.headers.every((item, index) => item === header[index])
+  );
+}
+function canonicalRaw(header: string[], values: string[], layout: Layout) {
+  return Object.fromEntries(
+    header.map((key, column) => [
+      layout.aliases[key] ?? key,
+      values[column] ?? ""
+    ])
+  );
+}
+function unknown(header: string[], layouts: Layout[]) {
+  return {
+    header,
+    detectedVersion: null,
+    rows: [],
+    errors: [
+      {
+        line: 1,
+        message: `Layout desconhecido. Cabeçalho recebido: ${header.join(", ") || "vazio"}. Versões aceitas: ${layouts.map((item) => item.version).join(", ")}.`
+      }
+    ]
+  };
+}
 
 export function parsePortalCsv(content: string) {
   const { lines, header } = source(content);
-  const missing = PORTAL_HEADERS.filter((item) => !header.includes(item));
-  if (missing.length)
-    return {
-      header,
-      rows: [],
-      errors: [
-        { line: 1, message: `Cabeçalho incompleto: ${missing.join(", ")}.` }
-      ]
-    };
+  const layout = detect(header, PORTAL_LAYOUTS);
+  if (!layout) return unknown(header, PORTAL_LAYOUTS);
   const rows: Record<string, string | number | Record<string, string>>[] = [];
   const errors: { line: number; message: string }[] = [];
   lines.slice(1).forEach((line, index) => {
     const number = index + 2;
-    const raw = Object.fromEntries(
-      header.map((key, column) => [key, lineValues(line)[column] ?? ""])
-    );
+    const raw = canonicalRaw(header, lineValues(line), layout);
     if (!raw.productCode)
       errors.push({ line: number, message: "productCode obrigatório." });
     if (!raw.description)
@@ -75,27 +135,18 @@ export function parsePortalCsv(content: string) {
         rawData: raw
       });
   });
-  return { header, rows, errors };
+  return { header, detectedVersion: layout.version, rows, errors };
 }
 
 export function parseDrawbackCsv(content: string) {
   const { lines, header } = source(content);
-  const missing = DRAWBACK_HEADERS.filter((item) => !header.includes(item));
-  if (missing.length)
-    return {
-      header,
-      rows: [],
-      errors: [
-        { line: 1, message: `Cabeçalho incompleto: ${missing.join(", ")}.` }
-      ]
-    };
+  const layout = detect(header, DRAWBACK_LAYOUTS);
+  if (!layout) return unknown(header, DRAWBACK_LAYOUTS);
   const rows: Record<string, string | number | Record<string, string>>[] = [];
   const errors: { line: number; message: string }[] = [];
   lines.slice(1).forEach((line, index) => {
     const number = index + 2;
-    const raw = Object.fromEntries(
-      header.map((key, column) => [key, lineValues(line)[column] ?? ""])
-    );
+    const raw = canonicalRaw(header, lineValues(line), layout);
     if (!raw.referenceCode)
       errors.push({ line: number, message: "referenceCode obrigatório." });
     if (!raw.productCode)
@@ -116,5 +167,5 @@ export function parseDrawbackCsv(content: string) {
         rawData: raw
       });
   });
-  return { header, rows, errors };
+  return { header, detectedVersion: layout.version, rows, errors };
 }
