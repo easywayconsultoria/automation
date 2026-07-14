@@ -21,3 +21,9 @@ O build foi executado no host disponível com Node 18.20.8 e concluiu, mas apres
 A migration foi aplicada no Supabase pelo session pooler. As quatro tabelas foram confirmadas no catálogo com RLS habilitada. A conta de teste foi confirmada e o formulário real de login retornou `303 /workspace` com cookie de sessão. O workspace respondeu 200 e renderizou seu estado inicial. O banco confirmou um perfil, um workspace, uma membership `OWNER` e os eventos `signin`, `signout` e `workspace_created`. O formulário de recuperação de senha aceitou a solicitação e disparou o e-mail correspondente.
 
 O projeto Vercel está vinculado a `easy-way-canoas/easyway-ai`. O deploy de produção `dpl_619RPpKwp3cQ72eoKN2R9FEgL78a` ficou `Ready`, com alias estável `https://easyway-ai.vercel.app`. As páginas `/login` e `/signup` responderam 200, `/workspace` sem sessão redirecionou para `/login`, o formulário remoto de login retornou `303 /workspace` com cookie e o workspace autenticado respondeu 200.
+
+## Vertical de domínio
+
+As migrations `20260714193000_domain_vertical`, `20260714194500_storage_membership_policy` e `20260714195000_storage_delete_policy` foram aplicadas no Supabase. As nove tabelas do domínio foram confirmadas com RLS habilitada, e o bucket `process-documents` foi confirmado privado.
+
+Um processo temporário percorreu os fluxos reais de criação, item manual, CSV, drawback, análise e plano de ação. A conferência retornou dois itens, um documento CSV, quatro inconsistências, três ações agrupadas e um drawback. O teste de Storage confirmou upload, leitura e remoção com sessão autenticada e caminho restrito ao workspace. O processo e o arquivo temporários foram removidos após a validação.

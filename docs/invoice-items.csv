@@ -1,0 +1,2 @@
+lineNumber,supplierCode,description,ncm,quantity,unit,unitPrice,totalPrice,grossWeight,netWeight,currency,countryOfOrigin
+1,FORN-001,Produto de exemplo,00000000,10,UN,12.50,125.00,11.5,10.0,USD,US

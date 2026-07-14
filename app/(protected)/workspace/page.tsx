@@ -1,111 +1,54 @@
-import type { Metadata } from "next";
-import { redirect } from "next/navigation";
-import { logout } from "@/app/actions/auth";
-import { createClient } from "@/lib/supabase/server";
-import { getOrCreateWorkspace } from "@/lib/workspace/get-or-create";
-
-export const metadata: Metadata = { title: "Workspace" };
-const sections = [
-  "Dashboard",
-  "Processos",
-  "OCR",
-  "CSV",
-  "Conformidade",
-  "Drawback",
-  "Configurações"
-];
+import Link from "next/link";
+import { prisma } from "@/lib/db/prisma";
+import { requireWorkspace } from "@/lib/auth/context";
 
 export default async function WorkspacePage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error
-  } = await supabase.auth.getUser();
-  if (error || !user) redirect("/login");
-  const workspace = await getOrCreateWorkspace(user);
-  const displayName =
-    typeof user.user_metadata.full_name === "string"
-      ? user.user_metadata.full_name
-      : user.email;
-
+  const { workspace } = await requireWorkspace();
+  const [processes, pending, inconsistencies, drawbacks] = await Promise.all([
+    prisma.importProcess.count({ where: { workspaceId: workspace.id } }),
+    prisma.importProcess.count({
+      where: { workspaceId: workspace.id, status: "PENDING_ACTION" }
+    }),
+    prisma.inconsistency.count({
+      where: { workspaceId: workspace.id, status: "OPEN" }
+    }),
+    prisma.drawbackRecord.count({ where: { workspaceId: workspace.id } })
+  ]);
+  const cards = [
+    ["Processos", processes, "Operações cadastradas"],
+    ["Aguardando ação", pending, "Processos com pendências"],
+    ["Inconsistências abertas", inconsistencies, "Pontos para conferência"],
+    ["Drawbacks", drawbacks, "Registros acompanhados"]
+  ] as const;
   return (
-    <div className="min-h-screen bg-paper md:grid md:grid-cols-[250px_1fr]">
-      <aside className="border-b border-slate-200 bg-ink px-5 py-6 text-white md:min-h-screen md:border-b-0">
-        <div className="mb-8">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-300">
-            EasyWay AI
-          </p>
-          <p className="mt-2 truncate font-semibold">{workspace.name}</p>
-        </div>
-        <nav
-          aria-label="Navegação principal"
-          className="flex gap-2 overflow-x-auto md:block md:space-y-1"
-        >
-          {sections.map((section, index) => (
-            <span
-              key={section}
-              className={`block whitespace-nowrap rounded-lg px-3 py-2 text-sm ${index === 0 ? "bg-white/15 font-medium" : "text-slate-300"}`}
-            >
-              {section}
-            </span>
-          ))}
-        </nav>
-      </aside>
-      <main>
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4 lg:px-10">
-          <div>
-            <p className="font-semibold">{displayName}</p>
-            <p className="text-sm text-slate-500">{user.email}</p>
-          </div>
-          <form action={logout}>
-            <button className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50">
-              Sair
-            </button>
-          </form>
-        </header>
-        <div className="p-6 lg:p-10">
-          <div className="mb-8">
-            <p className="text-sm font-semibold text-brand">Dashboard</p>
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-              Seu workspace está pronto
-            </h1>
-            <p className="mt-2 max-w-2xl text-slate-600">
-              Esta é a base segura para centralizar processos, documentos e
-              verificações da EasyWay.
-            </p>
-          </div>
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {[
-              [
-                "Processos",
-                "Nenhum processo cadastrado",
-                "Organize operações de importação e exportação."
-              ],
-              [
-                "Documentos",
-                "Pronto para receber arquivos",
-                "OCR e extração de invoices serão conectados aqui."
-              ],
-              [
-                "Conformidade",
-                "Sem análises pendentes",
-                "Cruze dados e acompanhe validações regulatórias."
-              ]
-            ].map(([title, state, description]) => (
-              <article
-                key={title}
-                className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
-              >
-                <p className="text-sm font-medium text-slate-500">{title}</p>
-                <h2 className="mt-4 text-lg font-semibold">{state}</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  {description}
-                </p>
-              </article>
-            ))}
-          </section>
-        </div>
-      </main>
-    </div>
+    <>
+      <div className="mb-8">
+        <p className="text-sm font-semibold text-brand">Dashboard</p>
+        <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+          Visão operacional
+        </h1>
+        <p className="mt-2 text-slate-600">
+          Acompanhe processos, conformidade e ações do workspace.
+        </p>
+      </div>
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map(([title, value, description]) => (
+          <article
+            key={title}
+            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+          >
+            <p className="text-sm font-medium text-slate-500">{title}</p>
+            <p className="mt-3 text-3xl font-semibold">{value}</p>
+            <p className="mt-2 text-sm text-slate-600">{description}</p>
+          </article>
+        ))}
+      </section>
+      <Link
+        href="/workspace/processes"
+        className="mt-8 inline-flex rounded-lg bg-brand px-5 py-3 font-semibold text-white"
+      >
+        Gerenciar processos
+      </Link>
+    </>
   );
 }
