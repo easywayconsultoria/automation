@@ -1,7 +1,9 @@
 import Link from "next/link";
 import {
+  parseConversationCsv,
   runConversationQuickAction,
   sendConversationMessage,
+  transitionSuggestedAction,
   uploadConversationAttachment
 } from "@/app/actions/conversation";
 import {
@@ -59,11 +61,18 @@ export default async function ProcessPage({
       where: { workspaceId: workspace.id, importProcessId: processId },
       include: {
         messages: { orderBy: { createdAt: "asc" }, take: 100 },
-        attachments: { orderBy: { createdAt: "desc" }, take: 20 },
-        suggestedActions: {
-          where: { status: "OPEN" },
+        attachments: {
           orderBy: { createdAt: "desc" },
-          take: 8
+          take: 20,
+          include: {
+            processDocument: {
+              include: { portalCsvImports: true, drawbackCsvImports: true }
+            }
+          }
+        },
+        suggestedActions: {
+          orderBy: { createdAt: "desc" },
+          take: 12
         }
       }
     })
@@ -134,6 +143,16 @@ export default async function ProcessPage({
                   </p>
                 )}
                 <p className="whitespace-pre-wrap">{item.content}</p>
+                {item.role === "ASSISTANT" && item.structuredData && (
+                  <details className="mt-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+                    <summary className="cursor-pointer font-semibold text-brand">
+                      Por que esta resposta?
+                    </summary>
+                    <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap font-sans">
+                      {JSON.stringify(item.structuredData, null, 2)}
+                    </pre>
+                  </details>
+                )}
                 <time
                   className={`mt-2 block text-[10px] ${item.role === "USER" ? "text-emerald-100" : "text-slate-400"}`}
                 >
@@ -150,7 +169,11 @@ export default async function ProcessPage({
                 ["run_analysis", "Rodar análise"],
                 ["generate_action_plan", "Gerar plano"],
                 ["list_unmatched_items", "Itens sem classificação"],
-                ["summarize_drawback", "Resumo de drawback"]
+                ["summarize_drawback", "Resumo de drawback"],
+                ["summarize_drawback_balances", "Saldos drawback"],
+                ["summarize_portal_data", "Dados do Portal"],
+                ["identify_portal_registration_gaps", "Lacunas no Portal"],
+                ["summarize_drawback_coverage", "Cobertura drawback"]
               ].map(([toolName, label]) => (
                 <form action={runConversationQuickAction} key={toolName}>
                   <input type="hidden" name="processId" value={process.id} />
@@ -236,6 +259,27 @@ export default async function ProcessPage({
                   <p className="text-[10px] text-slate-500">
                     {attachment.kind}
                   </p>
+                  {(attachment.kind === "PORTAL_UNICO_CSV" ||
+                    attachment.kind === "DRAWBACK_CSV") && (
+                    <form action={parseConversationCsv} className="mt-2">
+                      <input
+                        type="hidden"
+                        name="processId"
+                        value={process.id}
+                      />
+                      <input
+                        type="hidden"
+                        name="attachmentId"
+                        value={attachment.id}
+                      />
+                      <button className="text-[11px] font-semibold text-brand hover:underline">
+                        {attachment.processDocument?.portalCsvImports.length ||
+                        attachment.processDocument?.drawbackCsvImports.length
+                          ? "Reprocessar CSV"
+                          : "Processar CSV"}
+                      </button>
+                    </form>
+                  )}
                 </div>
               ))}
             </div>
@@ -252,6 +296,41 @@ export default async function ProcessPage({
                     <p className="mt-1 text-xs text-amber-800">
                       {action.description}
                     </p>
+                    <p className="mt-1 text-[10px] font-bold text-amber-700">
+                      {action.status}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(action.status === "OPEN"
+                        ? [
+                            ["ACCEPTED", "Aceitar"],
+                            ["DISMISSED", "Dispensar"]
+                          ]
+                        : action.status === "ACCEPTED"
+                          ? [
+                              ["COMPLETED", "Concluir"],
+                              ["DISMISSED", "Dispensar"],
+                              ["OPEN", "Reabrir"]
+                            ]
+                          : [["OPEN", "Reabrir"]]
+                      ).map(([status, label]) => (
+                        <form action={transitionSuggestedAction} key={status}>
+                          <input
+                            type="hidden"
+                            name="processId"
+                            value={process.id}
+                          />
+                          <input
+                            type="hidden"
+                            name="actionId"
+                            value={action.id}
+                          />
+                          <input type="hidden" name="toStatus" value={status} />
+                          <button className="rounded border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold text-amber-900">
+                            {label}
+                          </button>
+                        </form>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>

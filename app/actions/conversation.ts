@@ -7,6 +7,7 @@ import { z } from "zod";
 import { requireProcess } from "@/lib/auth/context";
 import { writeAudit } from "@/lib/audit/write";
 import { prisma } from "@/lib/db/prisma";
+import { parseDrawbackCsv, parsePortalCsv } from "@/lib/domain/government-csv";
 import {
   processTools,
   runConversationTurn
@@ -152,4 +153,273 @@ export async function uploadConversationAttachment(formData: FormData) {
     fileName: file.name
   });
   redirect(path(processId, "Arquivo adicionado ao contexto da conversa."));
+}
+
+export async function transitionSuggestedAction(formData: FormData) {
+  const processId = String(formData.get("processId") ?? "");
+  const actionId = String(formData.get("actionId") ?? "");
+  const toStatus = z
+    .enum(["OPEN", "ACCEPTED", "DISMISSED", "COMPLETED"])
+    .safeParse(formData.get("toStatus"));
+  if (!toStatus.success) redirect(path(processId, "Transição inválida."));
+  const { user, workspace } = await requireProcess(processId);
+  const action = await prisma.suggestedAction.findFirst({
+    where: {
+      id: actionId,
+      importProcessId: processId,
+      workspaceId: workspace.id
+    }
+  });
+  if (!action) redirect(path(processId, "Sugestão não encontrada."));
+  const allowed: Record<string, string[]> = {
+    OPEN: ["ACCEPTED", "DISMISSED"],
+    ACCEPTED: ["COMPLETED", "DISMISSED", "OPEN"],
+    DISMISSED: ["OPEN"],
+    COMPLETED: ["OPEN"]
+  };
+  if (!allowed[action.status].includes(toStatus.data))
+    redirect(path(processId, "Transição não permitida."));
+  await prisma.$transaction([
+    prisma.suggestedAction.updateMany({
+      where: {
+        id: action.id,
+        workspaceId: workspace.id,
+        importProcessId: processId
+      },
+      data: { status: toStatus.data }
+    }),
+    prisma.suggestedActionEvent.create({
+      data: {
+        suggestedActionId: action.id,
+        workspaceId: workspace.id,
+        importProcessId: processId,
+        fromStatus: action.status,
+        toStatus: toStatus.data,
+        reason: String(formData.get("reason") ?? "").trim() || null,
+        actorId: user.id
+      }
+    })
+  ]);
+  await writeAudit("suggested_action_transitioned", user.id, workspace.id, {
+    processId,
+    actionId,
+    from: action.status,
+    to: toStatus.data
+  });
+  redirect(path(processId, "Status da sugestão atualizado."));
+}
+
+export async function parseConversationCsv(formData: FormData) {
+  const processId = String(formData.get("processId") ?? "");
+  const attachmentId = String(formData.get("attachmentId") ?? "");
+  const { user, workspace, supabase } = await requireProcess(processId);
+  const attachment = await prisma.conversationAttachment.findFirst({
+    where: {
+      id: attachmentId,
+      workspaceId: workspace.id,
+      importProcessId: processId,
+      kind: { in: ["PORTAL_UNICO_CSV", "DRAWBACK_CSV"] }
+    },
+    include: { conversation: true }
+  });
+  if (!attachment?.storagePath || !attachment.processDocumentId)
+    redirect(path(processId, "CSV contextual inválido."));
+  const { data, error } = await supabase.storage
+    .from("process-documents")
+    .download(attachment.storagePath);
+  if (error || !data)
+    redirect(path(processId, "Não foi possível ler o CSV privado."));
+  const isPortal = attachment.kind === "PORTAL_UNICO_CSV";
+  const result = isPortal
+    ? parsePortalCsv(await data.text())
+    : parseDrawbackCsv(await data.text());
+  const invalidRows = new Set(result.errors.map((item) => item.line)).size;
+  const processItems = await prisma.invoiceItem.findMany({
+    where: { workspaceId: workspace.id, importProcessId: processId }
+  });
+  const toolName = isPortal ? "parse_portal_csv" : "parse_drawback_csv";
+  await prisma.$transaction(async (tx) => {
+    if (isPortal) {
+      const imported = await tx.portalCsvImport.upsert({
+        where: { processDocumentId: attachment.processDocumentId! },
+        create: {
+          workspaceId: workspace.id,
+          importProcessId: processId,
+          processDocumentId: attachment.processDocumentId!,
+          status: result.errors.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED",
+          header: result.header,
+          errors: result.errors,
+          validRows: result.rows.length,
+          invalidRows,
+          processedAt: new Date()
+        },
+        update: {
+          status: result.errors.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED",
+          header: result.header,
+          errors: result.errors,
+          validRows: result.rows.length,
+          invalidRows,
+          processedAt: new Date()
+        }
+      });
+      await tx.portalCsvRow.deleteMany({
+        where: { portalCsvImportId: imported.id, workspaceId: workspace.id }
+      });
+      if (result.rows.length)
+        await tx.portalCsvRow.createMany({
+          data: result.rows.map((row) => ({
+            workspaceId: workspace.id,
+            importProcessId: processId,
+            portalCsvImportId: imported.id,
+            lineNumber: Number(row.lineNumber),
+            productCode: String(row.productCode),
+            description: String(row.description),
+            ncm: String(row.ncm) || null,
+            registrationStatus: String(row.registrationStatus),
+            rawData: row.rawData as object
+          }))
+        });
+    } else {
+      const imported = await tx.drawbackCsvImport.upsert({
+        where: { processDocumentId: attachment.processDocumentId! },
+        create: {
+          workspaceId: workspace.id,
+          importProcessId: processId,
+          processDocumentId: attachment.processDocumentId!,
+          status: result.errors.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED",
+          header: result.header,
+          errors: result.errors,
+          validRows: result.rows.length,
+          invalidRows,
+          processedAt: new Date()
+        },
+        update: {
+          status: result.errors.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED",
+          header: result.header,
+          errors: result.errors,
+          validRows: result.rows.length,
+          invalidRows,
+          processedAt: new Date()
+        }
+      });
+      await tx.drawbackCsvRow.deleteMany({
+        where: { drawbackCsvImportId: imported.id, workspaceId: workspace.id }
+      });
+      if (result.rows.length)
+        await tx.drawbackCsvRow.createMany({
+          data: result.rows.map((row) => ({
+            workspaceId: workspace.id,
+            importProcessId: processId,
+            drawbackCsvImportId: imported.id,
+            lineNumber: Number(row.lineNumber),
+            referenceCode: String(row.referenceCode),
+            productCode: String(row.productCode),
+            ncm: String(row.ncm) || null,
+            grantedQuantity: Number(row.grantedQuantity),
+            usedQuantity: Number(row.usedQuantity),
+            availableBalance: Number(row.availableBalance),
+            unit: String(row.unit) || null,
+            rawData: row.rawData as object
+          }))
+        });
+    }
+    await tx.toolExecution.create({
+      data: {
+        conversationId: attachment.conversationId,
+        workspaceId: workspace.id,
+        importProcessId: processId,
+        toolName,
+        input: { attachmentId },
+        output: { validRows: result.rows.length, errors: result.errors },
+        criteria: { parser: "header-and-row-validation", version: 1 },
+        sources: {
+          attachmentId,
+          processDocumentId: attachment.processDocumentId
+        },
+        limitations: { noFuzzyMatching: true, noExternalValidation: true },
+        status: "COMPLETED",
+        completedAt: new Date()
+      }
+    });
+    const assistantMessage = await tx.conversationMessage.create({
+      data: {
+        conversationId: attachment.conversationId,
+        workspaceId: workspace.id,
+        role: "ASSISTANT",
+        content: `${isPortal ? "Portal Único" : "Drawback"}: ${result.rows.length} linhas válidas e ${result.errors.length} erros de validação.`,
+        structuredData: {
+          toolName,
+          criteria: "Validação determinística de cabeçalho e linhas",
+          sources: [attachment.label],
+          limitations: [
+            "Sem consulta a sistemas governamentais",
+            "Sem matching aproximado"
+          ],
+          errors: result.errors
+        }
+      }
+    });
+    const suggestions = isPortal
+      ? processItems
+          .filter((item) => {
+            const row = result.rows.find(
+              (entry) =>
+                String(entry.productCode).trim().toUpperCase() ===
+                item.supplierCode?.trim().toUpperCase()
+            );
+            return (
+              !row ||
+              !["REGISTERED", "ATIVO", "CADASTRADO"].includes(
+                String(row.registrationStatus)
+              )
+            );
+          })
+          .map((item) => ({
+            type: `PORTAL_REGISTRATION_${item.id}`,
+            title: `Preparar cadastro do item ${item.lineNumber}`,
+            description: `O código ${item.supplierCode ?? "não informado"} não possui cadastro ativo confirmado no CSV ${attachment.label}.`
+          }))
+      : processItems
+          .filter((item) => {
+            const row = result.rows.find(
+              (entry) =>
+                String(entry.productCode).trim().toUpperCase() ===
+                item.supplierCode?.trim().toUpperCase()
+            );
+            return !row || Number(row.availableBalance) < Number(item.quantity);
+          })
+          .map((item) => ({
+            type: `DRAWBACK_COVERAGE_${item.id}`,
+            title: `Revisar cobertura do item ${item.lineNumber}`,
+            description: `O saldo do CSV ${attachment.label} não cobre a quantidade ${item.quantity.toString()} do item.`
+          }));
+    await tx.suggestedAction.deleteMany({
+      where: {
+        workspaceId: workspace.id,
+        importProcessId: processId,
+        status: "OPEN",
+        type: {
+          startsWith: isPortal ? "PORTAL_REGISTRATION_" : "DRAWBACK_COVERAGE_"
+        }
+      }
+    });
+    if (suggestions.length)
+      await tx.suggestedAction.createMany({
+        data: suggestions.map((suggestion) => ({
+          ...suggestion,
+          conversationId: attachment.conversationId,
+          workspaceId: workspace.id,
+          importProcessId: processId,
+          sourceMessageId: assistantMessage.id
+        }))
+      });
+  });
+  await writeAudit("conversation_csv_parsed", user.id, workspace.id, {
+    processId,
+    attachmentId,
+    toolName,
+    validRows: String(result.rows.length),
+    errors: String(result.errors.length)
+  });
+  redirect(path(processId, "CSV processado e registrado na conversa."));
 }

@@ -59,6 +59,8 @@ RAG poderá indexar documentos privados por workspace e processo, com citações
 
 ## Limitações atuais
 
+> O lifecycle operacional, a explicabilidade e os layouts CSV estão detalhados em [deterministic-governance.md](./deterministic-governance.md).
+
 - Não há leitura do conteúdo dos anexos.
 - A interpretação de intenção cobre um vocabulário operacional limitado.
 - Sugestões são informativas; ainda não há botões para aceitar ou dispensar.

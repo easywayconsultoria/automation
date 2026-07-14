@@ -16,7 +16,13 @@ export const processTools = [
   "list_unmatched_items",
   "list_ncm_issues",
   "summarize_drawback",
-  "suggest_next_steps"
+  "suggest_next_steps",
+  "summarize_portal_data",
+  "summarize_drawback_balances",
+  "compare_process_items_with_portal_data",
+  "identify_portal_registration_gaps",
+  "suggest_product_registration_actions",
+  "summarize_drawback_coverage"
 ] as const;
 export type ProcessTool = (typeof processTools)[number];
 
@@ -30,6 +36,9 @@ export function inferProcessTool(message: string): ProcessTool {
     return "list_unmatched_items";
   if (/ncm/.test(text)) return "list_ncm_issues";
   if (/drawback|saldo/.test(text)) return "summarize_drawback";
+  if (/portal.*(resum|dados)/.test(text)) return "summarize_portal_data";
+  if (/portal.*(lacuna|cadastro|registr)/.test(text))
+    return "identify_portal_registration_gaps";
   if (/document|anexo|arquivo/.test(text)) return "list_documents";
   if (/inconsist|pend[eê]ncia|problema/.test(text))
     return "list_inconsistencies";
@@ -80,12 +89,16 @@ export async function runConversationTurn(input: {
       input.processId,
       input.workspaceId
     );
+    const explanation = explain(toolName, result.data);
     const assistant = await prisma.$transaction(async (tx) => {
       await tx.toolExecution.update({
         where: { id: execution.id },
         data: {
           status: "COMPLETED",
           output: result.data as Prisma.InputJsonValue,
+          criteria: explanation.criteria as Prisma.InputJsonValue,
+          sources: explanation.sources as Prisma.InputJsonValue,
+          limitations: explanation.limitations as Prisma.InputJsonValue,
           completedAt: new Date()
         }
       });
@@ -107,7 +120,10 @@ export async function runConversationTurn(input: {
           workspaceId: input.workspaceId,
           role: "ASSISTANT",
           content: result.content,
-          structuredData: result.data as Prisma.InputJsonValue
+          structuredData: {
+            ...result.data,
+            explanation
+          } as Prisma.InputJsonValue
         }
       });
       if (result.suggestions?.length) {
@@ -164,7 +180,15 @@ async function loadContext(processId: string, workspaceId: string) {
           orderBy: { createdAt: "desc" }
         },
         actionPlan: { include: { items: true } },
-        drawback: true
+        drawback: true,
+        portalCsvImports: {
+          include: { rows: true },
+          orderBy: { processedAt: "desc" }
+        },
+        drawbackCsvImports: {
+          include: { rows: true },
+          orderBy: { processedAt: "desc" }
+        }
       }
     }),
     prisma.productCatalog.findMany({
@@ -185,6 +209,100 @@ async function executeTool(
   const unmatched = process.items.filter(
     (item) => !matchInvoiceItem(item, products, process.supplierId)
   );
+  const portalRows = process.portalCsvImports.flatMap((item) => item.rows);
+  const drawbackRows = process.drawbackCsvImports.flatMap((item) => item.rows);
+  const processCodes = new Set(
+    process.items
+      .map((item) => item.supplierCode?.trim().toUpperCase())
+      .filter(Boolean)
+  );
+  const portalByCode = new Map(
+    portalRows.map((row) => [row.productCode.trim().toUpperCase(), row])
+  );
+  if (tool === "summarize_portal_data")
+    return {
+      content: `A base parseada do Portal Único contém ${portalRows.length} produtos em ${process.portalCsvImports.length} importações.`,
+      data: {
+        imports: process.portalCsvImports.length,
+        rows: portalRows.length,
+        registered: portalRows.filter((row) =>
+          ["REGISTERED", "ATIVO", "CADASTRADO"].includes(row.registrationStatus)
+        ).length
+      }
+    };
+  if (tool === "summarize_drawback_balances") {
+    const available = drawbackRows.reduce(
+      (sum, row) => sum + Number(row.availableBalance),
+      0
+    );
+    return {
+      content: `Foram estruturadas ${drawbackRows.length} linhas de drawback, com saldo disponível agregado de ${available}.`,
+      data: {
+        imports: process.drawbackCsvImports.length,
+        rows: drawbackRows.length,
+        availableBalance: available
+      }
+    };
+  }
+  if (
+    [
+      "compare_process_items_with_portal_data",
+      "identify_portal_registration_gaps",
+      "suggest_product_registration_actions"
+    ].includes(tool)
+  ) {
+    const gaps = [...processCodes].filter(
+      (code) =>
+        !portalByCode.has(String(code)) ||
+        !["REGISTERED", "ATIVO", "CADASTRADO"].includes(
+          portalByCode.get(String(code))!.registrationStatus
+        )
+    );
+    return {
+      content: gaps.length
+        ? `${gaps.length} códigos do processo não possuem cadastro ativo confirmado na base parseada do Portal Único.`
+        : "Todos os códigos informados no processo possuem cadastro ativo na base parseada disponível.",
+      data: {
+        processCodes: processCodes.size,
+        portalRows: portalRows.length,
+        gaps
+      },
+      suggestions: gaps.map((code) => ({
+        type: `PORTAL_REGISTRATION_${code}`,
+        title: `Preparar cadastro para ${code}`,
+        description: `O código ${code} não possui cadastro ativo confirmado no CSV do Portal Único.`
+      }))
+    };
+  }
+  if (tool === "summarize_drawback_coverage") {
+    const insufficient = process.items.filter((item) => {
+      const row = drawbackRows.find(
+        (entry) =>
+          entry.productCode.trim().toUpperCase() ===
+          item.supplierCode?.trim().toUpperCase()
+      );
+      return !row || Number(row.availableBalance) < Number(item.quantity);
+    });
+    return {
+      content: insufficient.length
+        ? `${insufficient.length} itens não possuem cobertura suficiente na base de drawback parseada.`
+        : "A base parseada indica cobertura de saldo para todos os itens com código.",
+      data: {
+        items: process.items.length,
+        drawbackRows: drawbackRows.length,
+        insufficient: insufficient.map((item) => ({
+          line: item.lineNumber,
+          code: item.supplierCode,
+          required: item.quantity.toString()
+        }))
+      },
+      suggestions: insufficient.map((item) => ({
+        type: `DRAWBACK_COVERAGE_${item.id}`,
+        title: `Revisar saldo do item ${item.lineNumber}`,
+        description: `O saldo parseado não cobre a quantidade ${item.quantity.toString()} do código ${item.supplierCode ?? "sem código"}.`
+      }))
+    };
+  }
   if (tool === "summarize_process")
     return {
       content: `O processo ${process.reference} possui ${process.items.length} itens, ${process.documents.length} documentos e ${process.inconsistencies.length} inconsistências abertas. ${unmatched.length} itens estão sem correspondência. Fornecedor: ${process.supplier?.name ?? "não definido"}.`,
@@ -391,6 +509,32 @@ async function executeTool(
       unmatched.length,
       Boolean(process.actionPlan)
     )
+  };
+}
+
+function explain(toolName: ProcessTool, data: Record<string, unknown>) {
+  return {
+    criteria: [
+      "Tool determinística",
+      `Regra ${toolName}`,
+      "Filtros por workspace e processo"
+    ],
+    sources: [
+      "Processo",
+      "Itens",
+      "Documentos",
+      "Inconsistências",
+      "Catálogo",
+      "Drawback",
+      "CSVs parseados"
+    ],
+    rules: Object.keys(data),
+    limitations: [
+      "Sem consulta governamental em tempo real",
+      "Sem OCR",
+      "Sem LLM",
+      "Conclusão limitada aos dados persistidos"
+    ]
   };
 }
 
