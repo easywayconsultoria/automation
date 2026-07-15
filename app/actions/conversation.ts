@@ -67,14 +67,199 @@ const allowedMime = new Set([
   "text/csv",
   "text/plain",
   "image/png",
-  "image/jpeg"
+  "image/jpeg",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/xml",
+  "text/xml"
 ]);
+const allowedExtensions = new Set([
+  "pdf",
+  "csv",
+  "xlsx",
+  "xml",
+  "jpg",
+  "jpeg",
+  "png"
+]);
+const maxAttachmentBytes = Number(
+  process.env.MAX_CONVERSATION_ATTACHMENT_BYTES ?? 10_000_000
+);
+const maxAttachmentsPerMessage = 5;
 function isFile(value: FormDataEntryValue | null): value is File {
   return Boolean(
     value &&
       typeof value !== "string" &&
       typeof value.arrayBuffer === "function" &&
       value.size
+  );
+}
+
+function extension(file: File) {
+  return file.name.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function attachmentKind(file: File) {
+  const ext = extension(file);
+  if (ext === "csv")
+    return file.name.toLowerCase().includes("drawback")
+      ? ("DRAWBACK_CSV" as const)
+      : ("PORTAL_UNICO_CSV" as const);
+  if (ext === "pdf") return "INVOICE" as const;
+  return "OTHER" as const;
+}
+
+export async function sendConversationWithAttachments(formData: FormData) {
+  const processId = String(formData.get("processId") ?? "");
+  const content = String(formData.get("content") ?? "").trim();
+  const files = formData.getAll("files").filter(isFile);
+  if (!content && !files.length)
+    redirect(path(processId, "Digite uma mensagem ou anexe um arquivo."));
+  if (content.length > 4000)
+    redirect(path(processId, "Mensagem maior que 4.000 caracteres."));
+  if (files.length > maxAttachmentsPerMessage)
+    redirect(path(processId, "Envie no máximo 5 arquivos por mensagem."));
+  if (
+    files.some(
+      (file) =>
+        !file.size ||
+        file.size > maxAttachmentBytes ||
+        !allowedExtensions.has(extension(file)) ||
+        !allowedMime.has(file.type)
+    )
+  )
+    redirect(
+      path(
+        processId,
+        `Use PDF, CSV, XLSX, XML, JPG ou PNG com até ${Math.round(maxAttachmentBytes / 1_000_000)} MB por arquivo.`
+      )
+    );
+
+  const { user, workspace, supabase } = await requireProcess(processId);
+  const conversation = await prisma.conversation.findFirst({
+    where: { workspaceId: workspace.id, importProcessId: processId }
+  });
+  if (!conversation) redirect(path(processId, "Conversa não encontrada."));
+  const uploaded: {
+    file: File;
+    storagePath: string;
+    kind: ReturnType<typeof attachmentKind>;
+  }[] = [];
+  for (const file of files) {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const storagePath = `${workspace.id}/${processId}/${randomUUID()}-${safeName}`;
+    const { error } = await supabase.storage
+      .from("process-documents")
+      .upload(storagePath, file, { contentType: file.type, upsert: false });
+    if (error) {
+      if (uploaded.length)
+        await supabase.storage
+          .from("process-documents")
+          .remove(uploaded.map((item) => item.storagePath));
+      redirect(
+        path(
+          processId,
+          `Falha no upload de ${file.name}. Nenhum arquivo foi enviado.`
+        )
+      );
+    }
+    uploaded.push({ file, storagePath, kind: attachmentKind(file) });
+  }
+  let databaseCommitted = false;
+  try {
+    const persisted = await prisma.$transaction(async (tx) => {
+      const attachmentRecords = [];
+      for (const item of uploaded) {
+        const document = await tx.processDocument.create({
+          data: {
+            workspaceId: workspace.id,
+            importProcessId: processId,
+            uploadedById: user.id,
+            fileName: item.file.name,
+            mimeType: item.file.type,
+            storagePath: item.storagePath,
+            type:
+              item.kind === "INVOICE"
+                ? "INVOICE"
+                : item.kind.includes("CSV")
+                  ? "CSV"
+                  : "SUPPORT_DOC"
+          }
+        });
+        const attachment = await tx.conversationAttachment.create({
+          data: {
+            conversationId: conversation.id,
+            workspaceId: workspace.id,
+            importProcessId: processId,
+            processDocumentId: document.id,
+            kind: item.kind,
+            label: item.file.name,
+            storagePath: item.storagePath,
+            metadata: { mimeType: item.file.type, size: item.file.size },
+            createdById: user.id
+          }
+        });
+        attachmentRecords.push({
+          id: attachment.id,
+          documentId: document.id,
+          name: item.file.name,
+          kind: item.kind,
+          mimeType: item.file.type,
+          size: item.file.size
+        });
+      }
+      if (attachmentRecords.length)
+        await tx.conversationMessage.create({
+          data: {
+            conversationId: conversation.id,
+            workspaceId: workspace.id,
+            role: "SYSTEM",
+            content: `${attachmentRecords.length} arquivo(s) anexado(s) à conversa.`,
+            structuredData: {
+              type: "ATTACHMENT_BATCH",
+              attachments: attachmentRecords
+            },
+            createdById: user.id
+          }
+        });
+      await tx.conversation.update({
+        where: { id: conversation.id },
+        data: { updatedAt: new Date() }
+      });
+      return attachmentRecords;
+    });
+    databaseCommitted = true;
+    const prompt =
+      content ||
+      `Recebi ${persisted.map((item) => item.name).join(", ")}. Confirme os anexos e indique o próximo passo operacional.`;
+    const result = await runConversationTurn({
+      processId,
+      workspaceId: workspace.id,
+      userId: user.id,
+      message: prompt
+    });
+    await writeAudit(
+      "conversation_message_with_attachments",
+      user.id,
+      workspace.id,
+      { processId, files: String(persisted.length), toolName: result.toolName }
+    );
+  } catch (error) {
+    if (!databaseCommitted && uploaded.length)
+      await supabase.storage
+        .from("process-documents")
+        .remove(uploaded.map((item) => item.storagePath));
+    if (databaseCommitted)
+      redirect(
+        path(
+          processId,
+          "Anexos salvos, mas a resposta da IA falhou. Tente enviar a mensagem novamente."
+        )
+      );
+    throw error;
+  }
+  revalidatePath(path(processId));
+  redirect(
+    path(processId, files.length ? "Mensagem e anexos enviados." : undefined)
   );
 }
 

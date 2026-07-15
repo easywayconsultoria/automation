@@ -1,10 +1,9 @@
 import Link from "next/link";
 import {
   parseConversationCsv,
-  runConversationQuickAction,
-  sendConversationMessage,
-  uploadConversationAttachment
+  runConversationQuickAction
 } from "@/app/actions/conversation";
+import { AttachmentComposer } from "@/components/attachment-composer";
 import { requireProcess } from "@/lib/auth/context";
 import { prisma } from "@/lib/db/prisma";
 
@@ -91,33 +90,8 @@ export default async function ProcessChatPage({
               <Stat label="Lacunas" value={process.inconsistencies.length} />
               <Stat label="Propostas" value={proposals.length} />
             </div>
-            <form
-              action={uploadConversationAttachment}
-              className="mt-5 rounded-xl bg-slate-50 p-3"
-            >
-              <input type="hidden" name="processId" value={process.id} />
-              <p className="text-sm font-semibold">Anexar à conversa</p>
-              <select
-                name="kind"
-                className="mt-3 w-full rounded-lg border bg-white px-3 py-2 text-xs"
-              >
-                <option value="INVOICE">Invoice</option>
-                <option value="PORTAL_UNICO_CSV">CSV Portal Único</option>
-                <option value="DRAWBACK_CSV">CSV Drawback</option>
-                <option value="OTHER">Arquivo de apoio</option>
-              </select>
-              <input
-                type="file"
-                name="file"
-                required
-                accept=".pdf,.csv,.txt,.png,.jpg,.jpeg"
-                className="mt-3 block w-full text-xs"
-              />
-              <button className="mt-3 w-full rounded-lg bg-ink px-3 py-2 text-xs font-semibold text-white">
-                Adicionar arquivo
-              </button>
-            </form>
-            <div className="mt-4 space-y-2">
+            <p className="mt-5 text-sm font-semibold">Arquivos recebidos</p>
+            <div className="mt-3 space-y-2">
               {conversation.attachments.map((attachment) => (
                 <div key={attachment.id} className="rounded-xl border p-3">
                   <p className="truncate text-xs font-semibold">
@@ -211,6 +185,28 @@ export default async function ProcessChatPage({
               </div>
             </article>
           ))}
+          {conversation.attachments.length > 0 && (
+            <article className="rounded-2xl border bg-slate-50 p-4">
+              <p className="text-xs font-bold text-brand">
+                Arquivos no contexto
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {conversation.attachments.map((attachment) => (
+                  <span
+                    key={attachment.id}
+                    className="rounded-xl border bg-white px-3 py-2 text-xs"
+                  >
+                    <span className="block max-w-52 truncate font-semibold">
+                      {attachment.label}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {attachment.kind.replaceAll("_", " ")}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </article>
+          )}
         </div>
       </div>
       <footer className="shrink-0 bg-gradient-to-t from-white via-white to-transparent px-5 pb-5 pt-5">
@@ -225,22 +221,7 @@ export default async function ProcessChatPage({
             </form>
           ))}
         </div>
-        <form
-          action={sendConversationMessage}
-          className="mx-auto flex max-w-3xl items-end gap-3 rounded-[26px] border bg-white p-3 shadow-[0_10px_35px_rgba(15,23,42,0.12)]"
-        >
-          <input type="hidden" name="processId" value={process.id} />
-          <textarea
-            name="content"
-            required
-            rows={2}
-            placeholder="Pergunte, anexe contexto ou peça uma ação…"
-            className="min-h-14 flex-1 resize-none border-0 px-3 py-2 text-sm outline-none"
-          />
-          <button className="grid size-10 shrink-0 place-items-center rounded-full bg-ink text-white">
-            ↑
-          </button>
-        </form>
+        <AttachmentComposer processId={process.id} />
         <p className="mt-2 text-center text-[10px] text-slate-400">
           Ferramentas determinísticas · decisões auditáveis · revisão humana
         </p>
