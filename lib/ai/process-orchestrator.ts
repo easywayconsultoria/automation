@@ -6,6 +6,7 @@ import {
   analyzeProcess,
   matchInvoiceItem
 } from "@/lib/domain/analysis";
+import { analyzeOperationalDocuments } from "@/lib/domain/operational-analysis";
 
 export const processTools = [
   "summarize_process",
@@ -127,24 +128,37 @@ export async function runConversationTurn(input: {
         }
       });
       if (result.suggestions?.length) {
+        const suggestionTypes = result.suggestions.map(
+          (suggestion) => suggestion.type
+        );
+        const governed = await tx.suggestedAction.findMany({
+          where: {
+            conversationId: conversation.id,
+            workspaceId: input.workspaceId,
+            type: { in: suggestionTypes },
+            status: { not: "OPEN" }
+          },
+          select: { type: true }
+        });
+        const governedTypes = new Set(governed.map((action) => action.type));
         await tx.suggestedAction.deleteMany({
           where: {
             conversationId: conversation.id,
             workspaceId: input.workspaceId,
             status: "OPEN",
-            type: {
-              in: result.suggestions.map((suggestion) => suggestion.type)
-            }
+            type: { in: suggestionTypes }
           }
         });
         await tx.suggestedAction.createMany({
-          data: result.suggestions.map((suggestion) => ({
-            ...suggestion,
-            conversationId: conversation.id,
-            workspaceId: input.workspaceId,
-            importProcessId: input.processId,
-            sourceMessageId: message.id
-          }))
+          data: result.suggestions
+            .filter((suggestion) => !governedTypes.has(suggestion.type))
+            .map((suggestion) => ({
+              ...suggestion,
+              conversationId: conversation.id,
+              workspaceId: input.workspaceId,
+              importProcessId: input.processId,
+              sourceMessageId: message.id
+            }))
         });
       }
       await tx.conversation.update({
@@ -409,12 +423,33 @@ async function executeTool(
         : { registered: false }
     };
   if (tool === "run_analysis") {
-    const findings = analyzeProcess(
+    const baseFindings = analyzeProcess(
       process.items,
       products,
       process.drawback?.status === "DRAFT",
       process.supplierId
     );
+    const operational = analyzeOperationalDocuments({
+      process: {
+        invoiceNumber: process.invoiceNumber,
+        exporterName: process.exporterName,
+        clientName: process.clientName
+      },
+      items: process.items,
+      documents: process.documents,
+      portalRows,
+      drawbackRows
+    });
+    const findings = [
+      ...baseFindings,
+      ...operational.findings.map((finding) => ({
+        invoiceItemId: finding.invoiceItemId,
+        type: finding.type,
+        severity: finding.severity,
+        title: finding.title,
+        description: finding.description
+      }))
+    ];
     await prisma.$transaction(async (tx) => {
       await tx.inconsistency.deleteMany({
         where: {
@@ -438,23 +473,53 @@ async function executeTool(
       });
     });
     return {
-      content: `Análise executada. Foram identificadas ${findings.length} inconsistências; ${findings.filter((item) => item.type === "CATALOG_NOT_FOUND").length} são de correspondência de produto.`,
+      content: `Análise determinística concluída sobre ${operational.documentsAnalyzed} documentos e ${process.items.length} itens. Foram identificadas ${findings.length} inconsistências; ${operational.matchedItems} itens possuem correspondência documental e ${operational.findings.length} achados vieram do cruzamento operacional.`,
       data: {
         findings: findings.length,
         catalogNotFound: findings.filter(
           (item) => item.type === "CATALOG_NOT_FOUND"
-        ).length
+        ).length,
+        operational: {
+          documentsAnalyzed: operational.documentsAnalyzed,
+          documentItems: operational.documentItems,
+          matchedItems: operational.matchedItems,
+          unmatchedProcessItems: operational.unmatchedProcessItems,
+          orphanDocumentItems: operational.orphanDocumentItems,
+          findings: operational.findings.map((finding) => ({
+            type: finding.type,
+            severity: finding.severity,
+            title: finding.title,
+            description: finding.description,
+            source: finding.source,
+            suggestedAction: finding.suggestedAction
+          })),
+          sources: operational.sources
+        },
+        portal: {
+          rows: portalRows.length,
+          gaps: operational.findings.filter(
+            (finding) => finding.type === "PORTAL_REGISTRATION_GAP"
+          ).length
+        },
+        drawback: {
+          rows: drawbackRows.length,
+          coverageGaps: operational.findings.filter(
+            (finding) => finding.type === "DRAWBACK_COVERAGE_GAP"
+          ).length
+        }
       },
-      suggestions: findings.length
-        ? [
-            {
-              type: "GENERATE_PLAN",
-              title: "Gerar plano de ação",
-              description:
-                "Transforme as inconsistências abertas em ações operacionais."
-            }
-          ]
-        : []
+      suggestions: operational.findings.length
+        ? operational.findings.map((finding) => finding.suggestedAction)
+        : findings.length
+          ? [
+              {
+                type: "GENERATE_PLAN",
+                title: "Gerar plano de ação",
+                description:
+                  "Transforme as inconsistências abertas em ações operacionais."
+              }
+            ]
+          : []
     };
   }
   if (tool === "generate_action_plan") {

@@ -2,7 +2,8 @@ import Link from "next/link";
 import {
   confirmConversationDocumentType,
   parseConversationCsv,
-  runConversationQuickAction
+  runConversationQuickAction,
+  transitionSuggestedAction
 } from "@/app/actions/conversation";
 import { AttachmentComposer } from "@/components/attachment-composer";
 import { requireProcess } from "@/lib/auth/context";
@@ -130,8 +131,36 @@ export default async function ProcessChatPage({
                 <p>Drawback: {process.drawback?.status ?? "não informado"}</p>
                 <p>{conversation.suggestedActions.length} ações sugeridas</p>
                 <p>{proposals.length} propostas em revisão</p>
+                <p>
+                  {
+                    process.inconsistencies.filter((item) =>
+                      item.type.startsWith("DOCUMENT_")
+                    ).length
+                  }{" "}
+                  divergências documentais
+                </p>
               </div>
             </details>
+            {process.inconsistencies.length > 0 && (
+              <details className="mt-4 border-t pt-3">
+                <summary className="cursor-pointer text-sm font-semibold">
+                  Achados da análise
+                </summary>
+                <div className="mt-3 space-y-2">
+                  {process.inconsistencies.slice(0, 8).map((finding) => (
+                    <div
+                      key={finding.id}
+                      className="rounded-lg bg-slate-50 p-2 text-xs"
+                    >
+                      <p className="font-semibold">{finding.title}</p>
+                      <p className="mt-1 text-slate-500">
+                        {finding.description}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
             <Link
               href={`/workspace/processes/${process.id}`}
               className="mt-5 block text-center text-xs text-slate-400 hover:text-slate-700"
@@ -173,14 +202,17 @@ export default async function ProcessChatPage({
                 )}
                 <p className="whitespace-pre-wrap">{item.content}</p>
                 {item.role === "ASSISTANT" && item.structuredData && (
-                  <details className="mt-3 rounded-xl border bg-slate-50 p-3 text-xs">
-                    <summary className="cursor-pointer font-semibold">
-                      Ver evidências e dados
-                    </summary>
-                    <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap font-sans">
-                      {JSON.stringify(item.structuredData, null, 2)}
-                    </pre>
-                  </details>
+                  <>
+                    <OperationalAnalysisCard data={item.structuredData} />
+                    <details className="mt-3 rounded-xl border bg-slate-50 p-3 text-xs">
+                      <summary className="cursor-pointer font-semibold">
+                        Ver evidências e dados
+                      </summary>
+                      <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap font-sans">
+                        {JSON.stringify(item.structuredData, null, 2)}
+                      </pre>
+                    </details>
+                  </>
                 )}
               </div>
             </article>
@@ -195,6 +227,22 @@ export default async function ProcessChatPage({
                   <DocumentCard
                     key={attachment.id}
                     attachment={attachment}
+                    processId={process.id}
+                  />
+                ))}
+              </div>
+            </article>
+          )}
+          {conversation.suggestedActions.length > 0 && (
+            <article className="rounded-2xl border bg-white p-4">
+              <p className="text-xs font-bold text-brand">
+                Ações sugeridas para revisão humana
+              </p>
+              <div className="mt-3 space-y-3">
+                {conversation.suggestedActions.map((action) => (
+                  <SuggestedActionCard
+                    key={action.id}
+                    action={action}
                     processId={process.id}
                   />
                 ))}
@@ -229,6 +277,162 @@ function Stat({ label, value }: { label: string; value: string | number }) {
     <div className="rounded-xl bg-slate-50 p-3">
       <p className="text-slate-400">{label}</p>
       <p className="mt-1 text-lg font-semibold text-slate-800">{value}</p>
+    </div>
+  );
+}
+
+type AnalysisFinding = {
+  type?: unknown;
+  severity?: unknown;
+  title?: unknown;
+  description?: unknown;
+  source?: unknown;
+};
+
+function operationalAnalysis(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const root = value as Record<string, unknown>;
+  const operational = root.operational;
+  if (
+    !operational ||
+    typeof operational !== "object" ||
+    Array.isArray(operational)
+  )
+    return null;
+  const data = operational as Record<string, unknown>;
+  return {
+    documentsAnalyzed: Number(data.documentsAnalyzed ?? 0),
+    documentItems: Number(data.documentItems ?? 0),
+    matchedItems: Number(data.matchedItems ?? 0),
+    unmatchedProcessItems: Number(data.unmatchedProcessItems ?? 0),
+    findings: Array.isArray(data.findings)
+      ? (data.findings as AnalysisFinding[])
+      : []
+  };
+}
+
+function OperationalAnalysisCard({ data }: { data: unknown }) {
+  const analysis = operationalAnalysis(data);
+  if (!analysis) return null;
+  return (
+    <div className="mt-4 rounded-2xl border bg-white p-4 text-left text-xs shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-bold text-slate-800">Cruzamento operacional</p>
+        <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px]">
+          {analysis.findings.length} achado(s)
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <AnalysisStat label="Documentos" value={analysis.documentsAnalyzed} />
+        <AnalysisStat label="Linhas" value={analysis.documentItems} />
+        <AnalysisStat label="Correspondências" value={analysis.matchedItems} />
+        <AnalysisStat
+          label="Sem suporte"
+          value={analysis.unmatchedProcessItems}
+        />
+      </div>
+      {analysis.findings.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {analysis.findings.slice(0, 10).map((finding, index) => {
+            const source =
+              finding.source &&
+              typeof finding.source === "object" &&
+              !Array.isArray(finding.source)
+                ? (finding.source as Record<string, unknown>)
+                : {};
+            return (
+              <div
+                key={`${String(finding.type)}-${index}`}
+                className="rounded-xl border-l-4 border-amber-400 bg-amber-50 p-3"
+              >
+                <div className="flex justify-between gap-2">
+                  <p className="font-semibold text-slate-800">
+                    {String(finding.title ?? "Achado operacional")}
+                  </p>
+                  <span className="text-[9px] font-bold text-amber-700">
+                    {String(finding.severity ?? "REVIEW")}
+                  </span>
+                </div>
+                <p className="mt-1 text-slate-600">
+                  {String(finding.description ?? "")}
+                </p>
+                <p className="mt-1 text-[10px] text-slate-400">
+                  {[
+                    source.documentName,
+                    source.documentLine && `linha ${source.documentLine}`,
+                    source.criterion
+                  ]
+                    .filter(Boolean)
+                    .map(String)
+                    .join(" · ")}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalysisStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg bg-slate-50 p-2">
+      <p className="text-[9px] uppercase text-slate-400">{label}</p>
+      <p className="mt-1 text-base font-semibold">{value}</p>
+    </div>
+  );
+}
+
+type SuggestedActionCardProps = {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+};
+
+function SuggestedActionCard({
+  action,
+  processId
+}: {
+  action: SuggestedActionCardProps;
+  processId: string;
+}) {
+  const targets =
+    action.status === "OPEN"
+      ? (["ACCEPTED", "DISMISSED"] as const)
+      : action.status === "ACCEPTED"
+        ? (["COMPLETED", "DISMISSED"] as const)
+        : (["OPEN"] as const);
+  const labels: Record<string, string> = {
+    ACCEPTED: "Aceitar",
+    DISMISSED: "Dispensar",
+    COMPLETED: "Concluir",
+    OPEN: "Reabrir"
+  };
+  return (
+    <div className="rounded-xl border bg-slate-50 p-3 text-left text-xs">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="font-semibold">{action.title}</p>
+          <p className="mt-1 text-slate-500">{action.description}</p>
+        </div>
+        <span className="rounded-full bg-white px-2 py-1 text-[9px] font-bold text-slate-500">
+          {action.status}
+        </span>
+      </div>
+      <div className="mt-3 flex gap-2">
+        {targets.map((target) => (
+          <form action={transitionSuggestedAction} key={target}>
+            <input type="hidden" name="processId" value={processId} />
+            <input type="hidden" name="actionId" value={action.id} />
+            <input type="hidden" name="toStatus" value={target} />
+            <button className="rounded-full border bg-white px-3 py-1 text-[10px] font-semibold hover:border-slate-400">
+              {labels[target]}
+            </button>
+          </form>
+        ))}
+      </div>
     </div>
   );
 }
