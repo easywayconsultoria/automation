@@ -1,6 +1,7 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -9,6 +10,7 @@ import { writeAudit } from "@/lib/audit/write";
 import { prisma } from "@/lib/db/prisma";
 import { parseDrawbackCsv, parsePortalCsv } from "@/lib/domain/government-csv";
 import { matchInvoiceItem } from "@/lib/domain/analysis";
+import { parseOperationalDocument } from "@/lib/domain/operational-documents";
 import {
   processTools,
   runConversationTurn
@@ -143,8 +145,10 @@ export async function sendConversationWithAttachments(formData: FormData) {
     file: File;
     storagePath: string;
     kind: ReturnType<typeof attachmentKind>;
+    processing: Awaited<ReturnType<typeof parseOperationalDocument>>;
   }[] = [];
   for (const file of files) {
+    const processing = await parseOperationalDocument(file);
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     const storagePath = `${workspace.id}/${processId}/${randomUUID()}-${safeName}`;
     const { error } = await supabase.storage
@@ -162,7 +166,12 @@ export async function sendConversationWithAttachments(formData: FormData) {
         )
       );
     }
-    uploaded.push({ file, storagePath, kind: attachmentKind(file) });
+    uploaded.push({
+      file,
+      storagePath,
+      kind: attachmentKind(file),
+      processing
+    });
   }
   let databaseCommitted = false;
   try {
@@ -178,11 +187,22 @@ export async function sendConversationWithAttachments(formData: FormData) {
             mimeType: item.file.type,
             storagePath: item.storagePath,
             type:
-              item.kind === "INVOICE"
+              item.processing?.detectedType ??
+              (item.kind === "INVOICE"
                 ? "INVOICE"
                 : item.kind.includes("CSV")
                   ? "CSV"
-                  : "SUPPORT_DOC"
+                  : "SUPPORT_DOC"),
+            detectedType: item.processing?.detectedType,
+            status: item.processing?.status ?? "UPLOADED",
+            parsedAt:
+              item.processing?.status === "PARSED" ? new Date() : undefined,
+            processingSummary: item.processing?.summary as
+              | Prisma.InputJsonValue
+              | undefined,
+            processingErrors: item.processing?.errors as
+              | Prisma.InputJsonValue
+              | undefined
           }
         });
         const attachment = await tx.conversationAttachment.create({
@@ -204,7 +224,8 @@ export async function sendConversationWithAttachments(formData: FormData) {
           name: item.file.name,
           kind: item.kind,
           mimeType: item.file.type,
-          size: item.file.size
+          size: item.file.size,
+          processingStatus: item.processing?.status ?? "UPLOADED"
         });
       }
       if (attachmentRecords.length)
@@ -261,6 +282,108 @@ export async function sendConversationWithAttachments(formData: FormData) {
   redirect(
     path(processId, files.length ? "Mensagem e anexos enviados." : undefined)
   );
+}
+
+const documentClassification = z.enum([
+  "INVOICE",
+  "PORTAL_UNICO_CSV",
+  "DRAWBACK_CSV",
+  "XLSX_OPERATIONAL",
+  "XML_OPERATIONAL",
+  "SUPPORT_DOC"
+]);
+
+export async function confirmConversationDocumentType(formData: FormData) {
+  const processId = String(formData.get("processId") ?? "");
+  const attachmentId = String(formData.get("attachmentId") ?? "");
+  const classification = documentClassification.safeParse(
+    formData.get("classification")
+  );
+  if (!classification.success)
+    redirect(path(processId, "Tipo documental inválido."));
+  const { user, workspace } = await requireProcess(processId);
+  const attachment = await prisma.conversationAttachment.findFirst({
+    where: {
+      id: attachmentId,
+      workspaceId: workspace.id,
+      importProcessId: processId
+    },
+    include: { processDocument: true, conversation: true }
+  });
+  if (!attachment?.processDocument)
+    redirect(path(processId, "Documento da conversa não encontrado."));
+  const documentType =
+    classification.data === "PORTAL_UNICO_CSV" ||
+    classification.data === "DRAWBACK_CSV"
+      ? ("CSV" as const)
+      : classification.data;
+  const attachmentType =
+    classification.data === "PORTAL_UNICO_CSV" ||
+    classification.data === "DRAWBACK_CSV" ||
+    classification.data === "INVOICE"
+      ? classification.data
+      : ("OTHER" as const);
+  const previousType = attachment.processDocument.confirmedType;
+  await prisma.$transaction(async (tx) => {
+    await tx.processDocument.updateMany({
+      where: {
+        id: attachment.processDocument!.id,
+        workspaceId: workspace.id,
+        importProcessId: processId
+      },
+      data: {
+        type: documentType,
+        confirmedType: documentType,
+        typeConfirmedById: user.id,
+        typeConfirmedAt: new Date(),
+        status:
+          attachment.processDocument!.status === "FAILED"
+            ? "FAILED"
+            : "REVIEWED"
+      }
+    });
+    await tx.conversationAttachment.updateMany({
+      where: {
+        id: attachment.id,
+        workspaceId: workspace.id,
+        importProcessId: processId
+      },
+      data: { kind: attachmentType }
+    });
+    await tx.conversationMessage.create({
+      data: {
+        conversationId: attachment.conversation.id,
+        workspaceId: workspace.id,
+        role: "SYSTEM",
+        content: `Tipo de ${attachment.label ?? attachment.processDocument!.fileName} confirmado como ${classification.data.replaceAll("_", " ")}.`,
+        structuredData: {
+          type: "DOCUMENT_CLASSIFICATION_CONFIRMED",
+          attachmentId: attachment.id,
+          processDocumentId: attachment.processDocument!.id,
+          detectedType: attachment.processDocument!.detectedType,
+          previousType,
+          confirmedType: documentType,
+          classification: classification.data
+        },
+        createdById: user.id
+      }
+    });
+    await tx.conversation.update({
+      where: { id: attachment.conversation.id },
+      data: { updatedAt: new Date() }
+    });
+  });
+  await writeAudit("document_type_confirmed", user.id, workspace.id, {
+    processId,
+    attachmentId,
+    documentId: attachment.processDocument.id,
+    detectedType: attachment.processDocument.detectedType ?? "",
+    previousType: previousType ?? "",
+    confirmedType: documentType,
+    classification: classification.data
+  });
+  revalidatePath(path(processId));
+  redirect(path(processId, "Tipo documental confirmado no contexto."));
 }
 
 export async function uploadConversationAttachment(formData: FormData) {

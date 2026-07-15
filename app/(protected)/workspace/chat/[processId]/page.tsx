@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  confirmConversationDocumentType,
   parseConversationCsv,
   runConversationQuickAction
 } from "@/app/actions/conversation";
@@ -93,13 +94,12 @@ export default async function ProcessChatPage({
             <p className="mt-5 text-sm font-semibold">Arquivos recebidos</p>
             <div className="mt-3 space-y-2">
               {conversation.attachments.map((attachment) => (
-                <div key={attachment.id} className="rounded-xl border p-3">
-                  <p className="truncate text-xs font-semibold">
-                    {attachment.label}
-                  </p>
-                  <p className="text-[10px] text-slate-400">
-                    {attachment.kind}
-                  </p>
+                <DocumentCard
+                  key={attachment.id}
+                  attachment={attachment}
+                  processId={process.id}
+                  compact
+                >
                   {(attachment.kind === "PORTAL_UNICO_CSV" ||
                     attachment.kind === "DRAWBACK_CSV") && (
                     <form action={parseConversationCsv} className="mt-2">
@@ -118,7 +118,7 @@ export default async function ProcessChatPage({
                       </button>
                     </form>
                   )}
-                </div>
+                </DocumentCard>
               ))}
             </div>
             <details className="mt-4 border-t pt-3">
@@ -190,19 +190,13 @@ export default async function ProcessChatPage({
               <p className="text-xs font-bold text-brand">
                 Arquivos no contexto
               </p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 {conversation.attachments.map((attachment) => (
-                  <span
+                  <DocumentCard
                     key={attachment.id}
-                    className="rounded-xl border bg-white px-3 py-2 text-xs"
-                  >
-                    <span className="block max-w-52 truncate font-semibold">
-                      {attachment.label}
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      {attachment.kind.replaceAll("_", " ")}
-                    </span>
-                  </span>
+                    attachment={attachment}
+                    processId={process.id}
+                  />
                 ))}
               </div>
             </article>
@@ -235,6 +229,154 @@ function Stat({ label, value }: { label: string; value: string | number }) {
     <div className="rounded-xl bg-slate-50 p-3">
       <p className="text-slate-400">{label}</p>
       <p className="mt-1 text-lg font-semibold text-slate-800">{value}</p>
+    </div>
+  );
+}
+
+type DocumentCardAttachment = {
+  id: string;
+  label: string | null;
+  kind: string;
+  processDocument: {
+    fileName: string;
+    type: string;
+    detectedType: string | null;
+    confirmedType: string | null;
+    status: string;
+    processingSummary: unknown;
+    processingErrors: unknown;
+  } | null;
+};
+
+function humanType(value: string | null | undefined) {
+  if (!value) return "não identificado";
+  return value.replaceAll("_", " ").toLowerCase();
+}
+
+function errorMessages(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) =>
+      item && typeof item === "object" && "message" in item
+        ? String(item.message)
+        : ""
+    )
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
+function summaryFacts(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const data = value as Record<string, unknown>;
+  return [
+    data.root ? `Raiz XML: ${String(data.root)}` : null,
+    data.itemCount !== undefined ? `Itens: ${String(data.itemCount)}` : null,
+    data.sheetCount !== undefined
+      ? `Planilhas: ${String(data.sheetCount)}`
+      : null,
+    data.activeSheet ? `Planilha ativa: ${String(data.activeSheet)}` : null,
+    data.identifier ? `Identificador: ${String(data.identifier)}` : null
+  ].filter((item): item is string => Boolean(item));
+}
+
+function DocumentCard({
+  attachment,
+  processId,
+  compact = false,
+  children
+}: {
+  attachment: DocumentCardAttachment;
+  processId: string;
+  compact?: boolean;
+  children?: React.ReactNode;
+}) {
+  const document = attachment.processDocument;
+  const errors = errorMessages(document?.processingErrors);
+  const facts = summaryFacts(document?.processingSummary);
+  const pending = document?.status === "PENDING_CLASSIFICATION";
+  return (
+    <div className="rounded-xl border bg-white p-3 text-left text-xs">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate font-semibold">
+            {attachment.label ?? document?.fileName}
+          </p>
+          <p className="mt-1 text-[10px] text-slate-400">
+            Detectado: {humanType(document?.detectedType ?? document?.type)}
+          </p>
+        </div>
+        <span
+          className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-semibold ${
+            document?.status === "FAILED"
+              ? "bg-red-50 text-red-700"
+              : pending
+                ? "bg-amber-50 text-amber-700"
+                : "bg-emerald-50 text-emerald-700"
+          }`}
+        >
+          {document?.status.replaceAll("_", " ") ?? "UPLOADED"}
+        </span>
+      </div>
+      {document?.confirmedType && (
+        <p className="mt-2 font-medium text-emerald-700">
+          Confirmado: {humanType(document.confirmedType)}
+        </p>
+      )}
+      {pending && (
+        <p className="mt-2 text-amber-700">
+          Estrutura válida, mas a classificação precisa ser confirmada.
+        </p>
+      )}
+      {!compact && facts.length > 0 && (
+        <div className="mt-2 space-y-1 text-slate-500">
+          {facts.map((fact) => (
+            <p key={fact}>{fact}</p>
+          ))}
+        </div>
+      )}
+      {!compact && errors.length > 0 && (
+        <details className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">
+          <summary className="cursor-pointer font-semibold">
+            {errors.length} alerta(s) de processamento
+          </summary>
+          <ul className="mt-1 list-disc space-y-1 pl-4">
+            {errors.map((error) => (
+              <li key={error}>{error}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <form
+        action={confirmConversationDocumentType}
+        className="mt-3 flex items-center gap-2"
+      >
+        <input type="hidden" name="processId" value={processId} />
+        <input type="hidden" name="attachmentId" value={attachment.id} />
+        <select
+          name="classification"
+          defaultValue={
+            attachment.kind === "PORTAL_UNICO_CSV" ||
+            attachment.kind === "DRAWBACK_CSV"
+              ? attachment.kind
+              : (document?.confirmedType ??
+                document?.detectedType ??
+                "SUPPORT_DOC")
+          }
+          aria-label={`Tipo documental de ${attachment.label}`}
+          className="min-w-0 flex-1 rounded-lg border bg-white px-2 py-1.5 text-[10px]"
+        >
+          <option value="INVOICE">Invoice</option>
+          <option value="PORTAL_UNICO_CSV">Portal Único CSV</option>
+          <option value="DRAWBACK_CSV">Drawback CSV</option>
+          <option value="XLSX_OPERATIONAL">XLSX operacional</option>
+          <option value="XML_OPERATIONAL">XML operacional</option>
+          <option value="SUPPORT_DOC">Suporte / anexo geral</option>
+        </select>
+        <button className="rounded-lg bg-slate-900 px-2 py-1.5 text-[10px] font-semibold text-white">
+          {document?.confirmedType ? "Corrigir" : "Confirmar"}
+        </button>
+      </form>
+      {children}
     </div>
   );
 }

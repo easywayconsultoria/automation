@@ -337,13 +337,20 @@ async function executeTool(
     };
   if (tool === "list_documents")
     return {
-      content: `${process.documents.length} documentos fazem parte do contexto deste processo.`,
+      content: `${process.documents.length} documentos fazem parte do contexto deste processo.${process.documents.some((doc) => doc.status === "PENDING_CLASSIFICATION") ? " Há documentos aguardando confirmação de tipo na conversa." : ""}`,
       data: {
         count: process.documents.length,
+        pendingClassification: process.documents.filter(
+          (doc) => doc.status === "PENDING_CLASSIFICATION"
+        ).length,
         documents: process.documents.map((doc) => ({
           name: doc.fileName,
+          detectedType: doc.detectedType,
+          confirmedType: doc.confirmedType,
           type: doc.type,
-          status: doc.status
+          status: doc.status,
+          summary: doc.processingSummary,
+          warnings: doc.processingErrors
         }))
       }
     };

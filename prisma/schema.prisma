@@ -26,6 +26,8 @@ enum DocumentType {
   INVOICE
   PACKING_LIST
   CSV
+  XLSX_OPERATIONAL
+  XML_OPERATIONAL
   DECLARATION
   SUPPORT_DOC
   OTHER
@@ -39,6 +41,7 @@ enum DocumentSource {
 
 enum DocumentStatus {
   UPLOADED
+  PENDING_CLASSIFICATION
   PARSED
   FAILED
   REVIEWED
@@ -171,6 +174,7 @@ model UserProfile {
   auditLogs                     AuditLog[]                  @relation("AuditActor")
   createdProcesses              ImportProcess[]             @relation("ProcessCreator")
   uploadedDocuments             ProcessDocument[]           @relation("DocumentUploader")
+  confirmedDocuments            ProcessDocument[]           @relation("DocumentTypeConfirmer")
   conversations                 Conversation[]              @relation("ConversationCreator")
   conversationMessages          ConversationMessage[]       @relation("ConversationMessageCreator")
   conversationAttachments       ConversationAttachment[]    @relation("ConversationAttachmentCreator")
@@ -305,15 +309,23 @@ model ProcessDocument {
   uploadedAt              DateTime                 @default(now()) @map("uploaded_at")
   parsedAt                DateTime?                @map("parsed_at")
   status                  DocumentStatus           @default(UPLOADED)
+  detectedType            DocumentType?            @map("detected_type")
+  confirmedType           DocumentType?            @map("confirmed_type")
+  processingSummary       Json?                    @map("processing_summary")
+  processingErrors        Json?                    @map("processing_errors")
+  typeConfirmedById       String?                  @map("type_confirmed_by") @db.Uuid
+  typeConfirmedAt         DateTime?                @map("type_confirmed_at")
   workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   importProcess           ImportProcess            @relation(fields: [importProcessId], references: [id], onDelete: Cascade)
   uploadedBy              UserProfile              @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  typeConfirmedBy         UserProfile?             @relation("DocumentTypeConfirmer", fields: [typeConfirmedById], references: [id], onDelete: SetNull)
   items                   InvoiceItem[]
   conversationAttachments ConversationAttachment[]
   portalCsvImports        PortalCsvImport[]
   drawbackCsvImports      DrawbackCsvImport[]
 
   @@index([workspaceId, importProcessId, uploadedAt])
+  @@index([workspaceId, status, detectedType])
   @@map("process_documents")
 }
 
