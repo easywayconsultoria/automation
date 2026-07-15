@@ -472,6 +472,56 @@ export async function createImportProcess(formData: FormData) {
   redirect(processPath(process.id, "Processo criado."));
 }
 
+export async function startImportConversation(formData: FormData) {
+  const prompt = z
+    .string()
+    .trim()
+    .min(3)
+    .max(2000)
+    .safeParse(formData.get("content"));
+  if (!prompt.success)
+    redirect("/workspace?message=Descreva a operação para começar.");
+  const { user, workspace } = await requireWorkspace();
+  const stamp = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const reference = `AI-${stamp}-${randomUUID().slice(0, 6).toUpperCase()}`;
+  const clientName =
+    prompt.data.split(/[\n.!?]/)[0].slice(0, 120) || "Nova operação";
+  const process = await prisma.importProcess.create({
+    data: {
+      workspaceId: workspace.id,
+      createdById: user.id,
+      reference,
+      clientName,
+      notes: prompt.data,
+      conversation: {
+        create: {
+          workspaceId: workspace.id,
+          createdById: user.id,
+          title: clientName,
+          messages: {
+            create: [
+              { workspaceId: workspace.id, role: "USER", content: prompt.data },
+              {
+                workspaceId: workspace.id,
+                role: "ASSISTANT",
+                content:
+                  "Entendi. Abri uma conversa operacional para este despacho. Anexe a invoice ou os CSVs no composer e me peça para analisar; vou conduzir as lacunas, o drawback e o plano de ação por aqui."
+              }
+            ]
+          }
+        }
+      }
+    }
+  });
+  await writeAudit(
+    "import_process_created_from_conversation",
+    user.id,
+    workspace.id,
+    { processId: process.id, reference }
+  );
+  redirect(`/workspace/chat/${process.id}`);
+}
+
 export async function setProcessSupplier(formData: FormData) {
   const processId = String(formData.get("processId") ?? "");
   const supplierId = optional(formData.get("supplierId"));

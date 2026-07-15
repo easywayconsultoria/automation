@@ -15,7 +15,7 @@ import {
 } from "@/lib/ai/process-orchestrator";
 
 function path(processId: string, message?: string) {
-  return `/workspace/processes/${processId}${message ? `?message=${encodeURIComponent(message)}` : ""}`;
+  return `/workspace/chat/${processId}${message ? `?message=${encodeURIComponent(message)}` : ""}`;
 }
 
 export async function sendConversationMessage(formData: FormData) {
@@ -358,11 +358,44 @@ export async function parseConversationCsv(formData: FormData) {
   if (error || !data)
     redirect(path(processId, "Não foi possível ler o CSV privado."));
   const isPortal = attachment.kind === "PORTAL_UNICO_CSV";
+  const layoutDefinitions = await prisma.csvLayoutDefinition.findMany({
+    where: {
+      type: isPortal ? "PORTAL_UNICO" : "DRAWBACK",
+      status: "ACTIVE",
+      OR: [{ workspaceId: workspace.id }, { workspaceId: null }]
+    },
+    orderBy: { version: "desc" }
+  });
+  const contracts = layoutDefinitions.map((definition) => ({
+    version: definition.version,
+    headers: Array.isArray(definition.expectedOrder)
+      ? definition.expectedOrder.map(String)
+      : [],
+    aliases:
+      definition.aliases &&
+      typeof definition.aliases === "object" &&
+      !Array.isArray(definition.aliases)
+        ? Object.fromEntries(
+            Object.entries(definition.aliases).map(([key, value]) => [
+              key,
+              String(value)
+            ])
+          )
+        : {}
+  }));
+  const content = await data.text();
   const result = isPortal
-    ? parsePortalCsv(await data.text())
-    : parseDrawbackCsv(await data.text());
+    ? parsePortalCsv(content, contracts)
+    : parseDrawbackCsv(content, contracts);
+  const layout = layoutDefinitions.find(
+    (definition) =>
+      definition.version === result.detectedVersion &&
+      Array.isArray(definition.expectedOrder) &&
+      JSON.stringify(definition.expectedOrder.map(String)) ===
+        JSON.stringify(result.header)
+  );
   const invalidRows = new Set(result.errors.map((item) => item.line)).size;
-  const [processItems, products, process, layout] = await Promise.all([
+  const [processItems, products, process] = await Promise.all([
     prisma.invoiceItem.findMany({
       where: { workspaceId: workspace.id, importProcessId: processId }
     }),
@@ -373,17 +406,7 @@ export async function parseConversationCsv(formData: FormData) {
     prisma.importProcess.findFirst({
       where: { id: processId, workspaceId: workspace.id },
       select: { supplierId: true }
-    }),
-    result.detectedVersion
-      ? prisma.csvLayoutDefinition.findFirst({
-          where: {
-            type: isPortal ? "PORTAL_UNICO" : "DRAWBACK",
-            version: result.detectedVersion,
-            active: true,
-            OR: [{ workspaceId: workspace.id }, { workspaceId: null }]
-          }
-        })
-      : null
+    })
   ]);
   const importStatus = !result.detectedVersion
     ? "FAILED"

@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getOrCreateWorkspace } from "@/lib/workspace/get-or-create";
 import { prisma } from "@/lib/db/prisma";
+import { isLayoutAdminEnabled } from "@/lib/config/features";
 
 export async function requireWorkspace() {
   const supabase = await createClient();
@@ -15,7 +16,22 @@ export async function requireWorkspace() {
     where: { members: { some: { userId: user.id } } }
   });
   const workspace = existing ?? (await getOrCreateWorkspace(user));
-  return { user, workspace, supabase };
+  const membership = await prisma.workspaceMember.findFirst({
+    where: { workspaceId: workspace.id, userId: user.id },
+    select: { role: true }
+  });
+  if (!membership) redirect("/login");
+  return { user, workspace, supabase, role: membership.role };
+}
+
+export async function requireLayoutAdmin() {
+  const context = await requireWorkspace();
+  if (
+    !isLayoutAdminEnabled() ||
+    (context.role !== "OWNER" && context.role !== "ADMIN")
+  )
+    notFound();
+  return context;
 }
 
 export async function requireProcess(processId: string) {

@@ -2,7 +2,7 @@
 
 ## Contrato de layout
 
-`CsvLayoutDefinition` formaliza nome, tipo, versão, estado ativo, colunas obrigatórias/opcionais, ordem esperada, regras, aliases e descrição. Definições sem `workspaceId` são globais; o modelo permite versões específicas por workspace no futuro.
+`CsvLayoutDefinition` formaliza nome, tipo, versão, ciclo de vida, colunas obrigatórias/opcionais, ordem esperada, regras, aliases e descrição. Definições sem `workspaceId` são globais; definições administrativas são isoladas por workspace. O fluxo de edição, sandbox, ativação e rollback está em [Administração segura de contratos CSV](./layout-admin-governance.md).
 
 Layouts iniciais:
 
@@ -46,7 +46,7 @@ Proposta, item, import, documento e processo são sempre filtrados pelo workspac
 ## Limitações
 
 - Detecção exige ordem exata das colunas.
-- Apenas versões 1.0 e 0.9 estão ativas.
-- Não existe editor administrativo de layouts na UI.
+- As versões globais 1.0 e 0.9 permanecem ativas até uma mudança administrativa explícita.
+- O editor administrativo depende da feature flag e dos papéis OWNER/ADMIN.
 - A conversão cria ação interna; não transmite cadastro ao governo.
 - Não há OCR, LLM, RAG ou validação online.
