@@ -1,221 +1,81 @@
-import Link from "next/link";
+import { startImportConversation } from "@/app/actions/domain";
 import { requireWorkspace } from "@/lib/auth/context";
-import { prisma } from "@/lib/db/prisma";
-import { matchInvoiceItem } from "@/lib/domain/analysis";
 
-function rate(matched: number, total: number) {
-  return total ? Math.round((matched / total) * 1000) / 10 : 0;
-}
+const prompts = [
+  "Quero iniciar um novo despacho de importação",
+  "Preciso conferir uma invoice e classificar os itens",
+  "Quero revisar cobertura e saldos de drawback",
+  "Analise os documentos e monte um plano de ação"
+];
 
-export default async function WorkspacePage() {
-  const { workspace } = await requireWorkspace();
-  const [
-    processes,
-    products,
-    pending,
-    inconsistencies,
-    drawbacks,
-    aliasGroups
-  ] = await Promise.all([
-    prisma.importProcess.findMany({
-      where: { workspaceId: workspace.id },
-      include: { items: true, supplier: true },
-      orderBy: { createdAt: "desc" }
-    }),
-    prisma.productCatalog.findMany({
-      where: { workspaceId: workspace.id, active: true },
-      include: { aliases: true }
-    }),
-    prisma.importProcess.count({
-      where: { workspaceId: workspace.id, status: "PENDING_ACTION" }
-    }),
-    prisma.inconsistency.count({
-      where: { workspaceId: workspace.id, status: "OPEN" }
-    }),
-    prisma.drawbackRecord.count({ where: { workspaceId: workspace.id } }),
-    prisma.productAlias.groupBy({
-      by: ["supplierId"],
-      where: { workspaceId: workspace.id },
-      _count: true
-    })
-  ]);
-
-  const processMetrics = processes.map((process) => {
-    const matched = process.items.filter((item) =>
-      matchInvoiceItem(item, products, process.supplierId)
-    ).length;
-    return {
-      id: process.id,
-      reference: process.reference,
-      supplier: process.supplier?.name ?? "Sem fornecedor",
-      total: process.items.length,
-      matched,
-      rate: rate(matched, process.items.length)
-    };
-  });
-  const totalItems = processMetrics.reduce((sum, item) => sum + item.total, 0);
-  const matchedItems = processMetrics.reduce(
-    (sum, item) => sum + item.matched,
-    0
-  );
-  const supplierMetrics = new Map<string, { total: number; matched: number }>();
-  for (const metric of processMetrics) {
-    const current = supplierMetrics.get(metric.supplier) ?? {
-      total: 0,
-      matched: 0
-    };
-    current.total += metric.total;
-    current.matched += metric.matched;
-    supplierMetrics.set(metric.supplier, current);
-  }
-  const globalAliases =
-    aliasGroups.find((group) => !group.supplierId)?._count ?? 0;
-  const supplierAliases = aliasGroups.reduce(
-    (sum, group) => sum + (group.supplierId ? group._count : 0),
-    0
-  );
-  const cards = [
-    ["Processos", processes.length, "Operações cadastradas"],
-    ["Aguardando ação", pending, "Processos com pendências"],
-    ["Inconsistências abertas", inconsistencies, "Pontos para conferência"],
-    ["Drawbacks", drawbacks, "Registros acompanhados"]
-  ] as const;
-  const quality = [
-    ["Itens", totalItems, "Base total analisável"],
-    ["Classificados", matchedItems, "Match válido neste momento"],
-    [
-      "Sem correspondência",
-      totalItems - matchedItems,
-      "Exigem catálogo ou alias"
-    ],
-    [
-      "Taxa de correspondência",
-      `${rate(matchedItems, totalItems)}%`,
-      "Qualidade operacional"
-    ],
-    ["Aliases globais", globalAliases, "Aplicáveis sem fornecedor"],
-    ["Aliases específicos", supplierAliases, "Com contexto de fornecedor"]
-  ] as const;
-  return (
-    <>
-      <div className="mb-8">
-        <p className="text-sm font-semibold text-brand">Dashboard</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-          Visão operacional
-        </h1>
-        <p className="mt-2 text-slate-600">
-          Acompanhe processos, conformidade e qualidade do matching.
-        </p>
-      </div>
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {cards.map(([title, value, description]) => (
-          <MetricCard
-            key={title}
-            title={title}
-            value={value}
-            description={description}
-          />
-        ))}
-      </section>
-
-      <section className="mt-12">
-        <h2 className="text-2xl font-semibold">Qualidade da classificação</h2>
-        <p className="mt-1 text-sm text-slate-500">
-          Calculada pelo mesmo matching determinístico usado na análise.
-        </p>
-        <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {quality.map(([title, value, description]) => (
-            <MetricCard
-              key={title}
-              title={title}
-              value={value}
-              description={description}
-            />
-          ))}
-        </div>
-        <div className="mt-6 grid gap-5 xl:grid-cols-2">
-          <QualityTable
-            title="Por processo"
-            rows={processMetrics.map((item) => [
-              item.reference,
-              `${item.matched}/${item.total}`,
-              `${item.rate}%`
-            ])}
-          />
-          <QualityTable
-            title="Por fornecedor"
-            rows={[...supplierMetrics].map(([name, item]) => [
-              name,
-              `${item.matched}/${item.total}`,
-              `${rate(item.matched, item.total)}%`
-            ])}
-          />
-        </div>
-      </section>
-      <div className="mt-8 flex gap-3">
-        <Link
-          href="/workspace/processes"
-          className="inline-flex rounded-lg bg-brand px-5 py-3 font-semibold text-white"
-        >
-          Gerenciar processos
-        </Link>
-        <Link
-          href="/workspace/suppliers"
-          className="inline-flex rounded-lg border bg-white px-5 py-3 font-semibold"
-        >
-          Gerenciar fornecedores
-        </Link>
-      </div>
-    </>
-  );
-}
-
-function MetricCard({
-  title,
-  value,
-  description
+export default async function WorkspacePage({
+  searchParams
 }: {
-  title: string;
-  value: string | number;
-  description: string;
+  searchParams: Promise<{ message?: string }>;
 }) {
+  const { user } = await requireWorkspace();
+  const { message } = await searchParams;
+  const firstName = String(
+    user.user_metadata.full_name ?? user.email ?? ""
+  ).split(/[ @]/)[0];
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <p className="text-sm font-medium text-slate-500">{title}</p>
-      <p className="mt-3 text-3xl font-semibold">{value}</p>
-      <p className="mt-2 text-sm text-slate-600">{description}</p>
-    </article>
-  );
-}
-function QualityTable({ title, rows }: { title: string; rows: string[][] }) {
-  return (
-    <div className="overflow-hidden rounded-xl border bg-white">
-      <h3 className="border-b px-5 py-4 font-semibold">{title}</h3>
-      <table className="w-full text-left text-sm">
-        <thead className="bg-slate-50 text-slate-500">
-          <tr>
-            <th className="px-5 py-3">Contexto</th>
-            <th className="px-5 py-3">Match</th>
-            <th className="px-5 py-3">Taxa</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row[0]} className="border-t">
-              <td className="px-5 py-3">{row[0]}</td>
-              <td className="px-5 py-3">{row[1]}</td>
-              <td className="px-5 py-3 font-semibold">{row[2]}</td>
-            </tr>
+    <div className="flex min-h-dvh flex-col">
+      <header className="flex h-14 items-center justify-between px-5 md:hidden">
+        <b>EasyWay AI</b>
+        <span className="text-xs text-slate-400">Nova conversa</span>
+      </header>
+      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 pb-8 pt-16">
+        <div className="mx-auto mb-8 grid size-14 place-items-center rounded-2xl bg-ink text-2xl font-black text-emerald-300">
+          E
+        </div>
+        <h1 className="text-center text-3xl font-semibold tracking-tight text-slate-900">
+          Como posso conduzir sua operação hoje
+          {firstName ? `, ${firstName}` : ""}?
+        </h1>
+        <p className="mx-auto mt-3 max-w-xl text-center text-sm leading-6 text-slate-500">
+          Abra um processo conversando. Depois anexe invoice, CSVs ou documentos
+          e use as ferramentas determinísticas dentro da própria conversa.
+        </p>
+        {message && (
+          <p className="mx-auto mt-4 rounded-xl bg-amber-50 px-4 py-2 text-sm text-amber-900">
+            {message}
+          </p>
+        )}
+        <form
+          action={startImportConversation}
+          className="mt-10 rounded-[26px] border border-slate-200 bg-white p-3 shadow-[0_12px_40px_rgba(15,23,42,0.10)] focus-within:border-slate-400"
+        >
+          <textarea
+            name="content"
+            required
+            rows={3}
+            autoFocus
+            placeholder="Descreva o despacho, cliente, origem ou o que você precisa analisar…"
+            className="w-full resize-none border-0 bg-transparent px-3 py-2 text-base outline-none placeholder:text-slate-400"
+          />
+          <div className="flex items-center justify-between px-2 pb-1">
+            <span className="text-xs text-slate-400">
+              Nova conversa = novo processo
+            </span>
+            <button className="grid size-10 place-items-center rounded-full bg-ink text-lg text-white">
+              ↑
+            </button>
+          </div>
+        </form>
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          {prompts.map((prompt) => (
+            <form action={startImportConversation} key={prompt}>
+              <input type="hidden" name="content" value={prompt} />
+              <button className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-left text-sm text-slate-600 hover:bg-slate-50">
+                {prompt}
+              </button>
+            </form>
           ))}
-          {!rows.length && (
-            <tr>
-              <td colSpan={3} className="px-5 py-6 text-slate-500">
-                Sem dados.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+        </div>
+      </div>
+      <p className="pb-4 text-center text-[11px] text-slate-400">
+        EasyWay AI usa ferramentas auditáveis e preserva decisões humanas.
+      </p>
     </div>
   );
 }

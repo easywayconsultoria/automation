@@ -15,7 +15,7 @@ import {
 } from "@/lib/ai/process-orchestrator";
 
 function path(processId: string, message?: string) {
-  return `/workspace/processes/${processId}${message ? `?message=${encodeURIComponent(message)}` : ""}`;
+  return `/workspace/chat/${processId}${message ? `?message=${encodeURIComponent(message)}` : ""}`;
 }
 
 export async function sendConversationMessage(formData: FormData) {
