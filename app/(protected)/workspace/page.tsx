@@ -1,4 +1,5 @@
 import { startImportConversation } from "@/app/actions/domain";
+import { AttachmentComposer } from "@/components/attachment-composer";
 import { requireWorkspace } from "@/lib/auth/context";
 
 const prompts = [
@@ -41,27 +42,9 @@ export default async function WorkspacePage({
             {message}
           </p>
         )}
-        <form
-          action={startImportConversation}
-          className="mt-10 rounded-[26px] border border-slate-200 bg-white p-3 shadow-[0_12px_40px_rgba(15,23,42,0.10)] focus-within:border-slate-400"
-        >
-          <textarea
-            name="content"
-            required
-            rows={3}
-            autoFocus
-            placeholder="Descreva o despacho, cliente, origem ou o que você precisa analisar…"
-            className="w-full resize-none border-0 bg-transparent px-3 py-2 text-base outline-none placeholder:text-slate-400"
-          />
-          <div className="flex items-center justify-between px-2 pb-1">
-            <span className="text-xs text-slate-400">
-              Nova conversa = novo processo
-            </span>
-            <button className="grid size-10 place-items-center rounded-full bg-ink text-lg text-white">
-              ↑
-            </button>
-          </div>
-        </form>
+        <div className="mt-10">
+          <AttachmentComposer />
+        </div>
         <div className="mt-5 grid gap-2 sm:grid-cols-2">
           {prompts.map((prompt) => (
             <form action={startImportConversation} key={prompt}>

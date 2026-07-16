@@ -2,12 +2,15 @@
 
 import { useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { sendConversationWithAttachments } from "@/app/actions/conversation";
+import {
+  sendConversationWithAttachments,
+  startConversationWithAttachments
+} from "@/app/actions/conversation";
 
 const accept = ".pdf,.csv,.xlsx,.xml,.jpg,.jpeg,.png";
 const maxFiles = 5;
 
-export function AttachmentComposer({ processId }: { processId: string }) {
+export function AttachmentComposer({ processId }: { processId?: string }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -33,10 +36,14 @@ export function AttachmentComposer({ processId }: { processId: string }) {
 
   return (
     <form
-      action={sendConversationWithAttachments}
+      action={
+        processId
+          ? sendConversationWithAttachments
+          : startConversationWithAttachments
+      }
       className="mx-auto max-w-3xl"
     >
-      <input type="hidden" name="processId" value={processId} />
+      {processId && <input type="hidden" name="processId" value={processId} />}
       {files.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {files.map((file, index) => (
@@ -120,7 +127,9 @@ export function AttachmentComposer({ processId }: { processId: string }) {
           placeholder={
             dragging
               ? "Solte os arquivos aqui…"
-              : "Pergunte ou envie documentos para esta operação…"
+              : processId
+                ? "Pergunte ou envie documentos para esta operação…"
+                : "Descreva a operação ou já anexe os documentos…"
           }
           className="min-h-14 flex-1 resize-none border-0 px-2 py-2 text-sm outline-none"
         />

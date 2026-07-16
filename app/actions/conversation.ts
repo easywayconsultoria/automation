@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { requireProcess } from "@/lib/auth/context";
+import { requireProcess, requireWorkspace } from "@/lib/auth/context";
 import { writeAudit } from "@/lib/audit/write";
 import { prisma } from "@/lib/db/prisma";
 import { parseDrawbackCsv, parsePortalCsv } from "@/lib/domain/government-csv";
@@ -110,16 +110,12 @@ function attachmentKind(file: File) {
   return "OTHER" as const;
 }
 
-export async function sendConversationWithAttachments(formData: FormData) {
-  const processId = String(formData.get("processId") ?? "");
-  const content = String(formData.get("content") ?? "").trim();
-  const files = formData.getAll("files").filter(isFile);
+function submissionError(content: string, files: File[]) {
   if (!content && !files.length)
-    redirect(path(processId, "Digite uma mensagem ou anexe um arquivo."));
-  if (content.length > 4000)
-    redirect(path(processId, "Mensagem maior que 4.000 caracteres."));
+    return "Digite uma mensagem ou anexe um arquivo.";
+  if (content.length > 4000) return "Mensagem maior que 4.000 caracteres.";
   if (files.length > maxAttachmentsPerMessage)
-    redirect(path(processId, "Envie no máximo 5 arquivos por mensagem."));
+    return "Envie no máximo 5 arquivos por mensagem.";
   if (
     files.some(
       (file) =>
@@ -129,12 +125,55 @@ export async function sendConversationWithAttachments(formData: FormData) {
         !allowedMime.has(file.type)
     )
   )
-    redirect(
-      path(
-        processId,
-        `Use PDF, CSV, XLSX, XML, JPG ou PNG com até ${Math.round(maxAttachmentBytes / 1_000_000)} MB por arquivo.`
-      )
-    );
+    return `Use PDF, CSV, XLSX, XML, JPG ou PNG com até ${Math.round(maxAttachmentBytes / 1_000_000)} MB por arquivo.`;
+  return null;
+}
+
+export async function startConversationWithAttachments(formData: FormData) {
+  const content = String(formData.get("content") ?? "").trim();
+  const files = formData.getAll("files").filter(isFile);
+  const error = submissionError(content, files);
+  if (error) redirect(`/workspace?message=${encodeURIComponent(error)}`);
+
+  const { user, workspace } = await requireWorkspace();
+  const stamp = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const reference = `AI-${stamp}-${randomUUID().slice(0, 6).toUpperCase()}`;
+  const clientName =
+    content.split(/[\n.!?]/)[0].slice(0, 120) ||
+    files[0]?.name.slice(0, 120) ||
+    "Nova operação";
+  const process = await prisma.importProcess.create({
+    data: {
+      workspaceId: workspace.id,
+      createdById: user.id,
+      reference,
+      clientName,
+      notes: content || `Processo iniciado com ${files.length} anexo(s).`,
+      conversation: {
+        create: {
+          workspaceId: workspace.id,
+          createdById: user.id,
+          title: clientName
+        }
+      }
+    }
+  });
+  await writeAudit(
+    "import_process_created_from_conversation",
+    user.id,
+    workspace.id,
+    { processId: process.id, reference }
+  );
+  formData.set("processId", process.id);
+  await sendConversationWithAttachments(formData);
+}
+
+export async function sendConversationWithAttachments(formData: FormData) {
+  const processId = String(formData.get("processId") ?? "");
+  const content = String(formData.get("content") ?? "").trim();
+  const files = formData.getAll("files").filter(isFile);
+  const error = submissionError(content, files);
+  if (error) redirect(path(processId, error));
 
   const { user, workspace, supabase } = await requireProcess(processId);
   const conversation = await prisma.conversation.findFirst({
